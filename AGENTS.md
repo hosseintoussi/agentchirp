@@ -8,9 +8,9 @@ Sources/
     Core.swift      Session/DailyStats structs, loadSessions(), fmtElapsed(), etc.
     Version.swift   appVersion constant + isDevBuild detection (path-based)
   ccbeacon/         AppKit menu bar app
-    AppDelegate.swift  NSStatusItem, menu building, notifications, file watching
-    Views.swift        SessionCardView (card bg + hover/click), SpinnerView, PulseDotView, IdleDotView
-    Snapshot.swift     --snapshot flag: renders the dropdown to PNGs for design review
+    AppDelegate.swift  NSStatusItem, popover, notifications, file watching
+    Dashboard.swift    Native session console, grouped rows, buttons, BeaconMark, adaptive surfaces
+    Snapshot.swift     --snapshot flag: renders fixture consoles to PNGs for design review
     main.swift         Entry point
 Tests/
   CCBeaconCoreTests/  Framework-free test runner (no XCTest needed)
@@ -23,17 +23,26 @@ AppKit code lives only in `Sources/ccbeacon/`. Everything testable goes in `CCBe
 
 ```sh
 swift build -c release
-.build/release/ccbeacon &       # runs as dev build — shows "dev" badge in dropdown
+.build/release/ccbeacon &       # runs as dev build — shows "dev" badge in console
 ```
 
-The menu bar button shows `>_` at idle, a Braille spinner + elapsed time while working,
-and an amber pulsing glyph when a session needs input.
+The menu bar button has a fixed square width with no text: a beacon at idle,
+a dotted activity circle while working, an amber exclamation circle when input is
+needed, and a checkmark for 10 seconds after completion. Counts live in the tooltip
+and console. Template images use the system tint (nil) except for the amber alert.
+Clicking opens a transient NSPopover with DashboardController. Native buttons support keyboard
+navigation. State changes rebuild grouped rows, while clock/token ticks update labels in place.
 
-To review dropdown layout/color changes without clicking through the menu bar:
+To review the full console in light and dark appearances without installing hooks:
 
 ```sh
-.build/release/ccbeacon --snapshot /tmp   # writes menu-dark.png + menu-light.png
+.build/release/ccbeacon --snapshot /tmp
+.build/release/ccbeacon --ui-check
 ```
+
+These commands render mixed, empty, working, idle, and overflow fixtures and exercise
+native controls, live transitions, usage updates, and scrolling. Neither mode will
+run the normal application launch or modify Claude settings.
 
 ## Test
 
@@ -117,17 +126,13 @@ git push
   parses only appended complete lines. Never re-read whole transcripts on the update tick —
   they can be tens of MB and `update()` runs every second on the main thread.
 
-- **CALayer frame fix:** `SpinnerView` and `PulseDotView` set `sublayer.frame` explicitly
-  before adding animations. Without this, `anchorPoint (0.5, 0.5)` maps to position `(0,0)`
-  and rotations pivot around the corner instead of the center.
-
 - **Menu bar text color:** use dynamic system colors (`NSColor.labelColor`) for the status
   button text so it adapts to light and dark menu bars. Never hardcode white or snapshot a
   dynamic color's `cgColor` for text — it becomes invisible on a light menu bar.
 
 - **Update timer runs in `.common` run-loop mode** — in `.default` mode timers stop firing
-  while the status item menu is tracking, freezing the spinner and elapsed times.
+  during interaction.
 
 - **Dev detection:** `isDevBuild` checks `CommandLine.arguments[0]` — any path not under
   `/opt/homebrew` or `/usr/local` is treated as a dev build and shows an orange "dev" badge
-  in the dropdown header.
+  in the console header.

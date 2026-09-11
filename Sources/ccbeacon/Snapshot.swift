@@ -5,15 +5,7 @@ import CCBeaconCore
 // menu-dark.png / menu-light.png so layout and color changes can be reviewed without
 // clicking through the real menu bar.
 
-private final class MenuBackdropView: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
-        bounds.fill()
-    }
-}
-
 func renderMenuSnapshots(to dir: String) {
-    let delegate = AppDelegate()
     let now = Date().timeIntervalSince1970
     let sessions = [
         Session(id: "s1", state: "waiting", ts: now - 154, cwd: "/Users/dev/code/api-gateway",
@@ -26,23 +18,16 @@ func renderMenuSnapshots(to dir: String) {
                 transcriptPath: "", totalTokens: 52_300, inputTokens: 4_100, outputTokens: 2_900,
                 cacheTokens: 45_300, model: "claude-sonnet-4-6", tty: "", terminal: ""),
     ]
-    let active = sessions.filter { $0.state != "idle" }
-    let idle   = sessions.filter { $0.state == "idle" }
-
     for (suffix, appearanceName) in [("dark", NSAppearance.Name.darkAqua), ("light", .aqua)] {
-        var itemViews: [NSView] = [delegate.headerItem(active: active, idle: idle).view!]
-        for s in sessions { itemViews.append(delegate.sessionRow(s).view!) }
-
-        let width  = delegate.menuW
-        let height = itemViews.reduce(CGFloat(16)) { $0 + $1.frame.height }
-        let container = MenuBackdropView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        var y = height - 8
-        for v in itemViews {
-            y -= v.frame.height
-            v.setFrameOrigin(NSPoint(x: 0, y: y))
-            container.addSubview(v)
-        }
-
+      for (scenario, fixture) in [("menu", sessions), ("empty", []), ("working", [sessions[1]]), ("idle", [sessions[2]]), ("overflow", (0..<12).map { index in
+          Session(id: "fixture-\(index)", state: index < 2 ? "waiting" : "working", ts: now - 90,
+                  cwd: "/Users/dev/code/project-\(index)", transcriptPath: "", totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "claude-sonnet-4-6")
+      })] {
+        let dashboard = DashboardController()
+        dashboard.refresh(fixture, muted: false)
+        let container = dashboard.view
+        let width = container.frame.width
+        let height = container.frame.height
         let window = NSWindow(contentRect: container.frame, styleMask: .borderless,
                               backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: appearanceName)
@@ -59,9 +44,58 @@ func renderMenuSnapshots(to dir: String) {
         rep.size = NSSize(width: width, height: height)
         container.cacheDisplay(in: container.bounds, to: rep)
         if let png = rep.representation(using: .png, properties: [:]) {
-            let path = dir + "/menu-\(suffix).png"
+            let path = dir + "/\(scenario)-\(suffix).png"
             try? png.write(to: URL(fileURLWithPath: path))
             print(path)
         }
+      }
     }
+}
+
+// Exercise real AppKit controls with injected actions, without terminal automation or hook writes.
+func checkDashboardInteractions() {
+    func session(_ id: String, _ state: String, tokens: Int = 100, terminal: String = "Terminal") -> Session {
+        Session(id: id, state: state, ts: Date().timeIntervalSince1970 - 90,
+                cwd: "/tmp/\(id)", transcriptPath: "", totalTokens: tokens,
+                inputTokens: tokens, outputTokens: 0, cacheTokens: 0,
+                model: "claude-sonnet-4-6", tty: "/dev/ttys001", terminal: terminal)
+    }
+    func descendants(_ view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { descendants($0) }
+    }
+    let dashboard = DashboardController()
+    var focused = "", muted = false, quit = false
+    dashboard.onFocus = { focused = $0.id }
+    dashboard.onMute = { muted.toggle() }
+    dashboard.onQuit = { quit = true }
+    let initial = [session("project", "waiting"), session("unsupported", "idle", terminal: "Other")]
+    dashboard.refresh(initial, muted: muted)
+    func buttons() -> [NSButton] { descendants(dashboard.view).compactMap { $0 as? NSButton } }
+    func texts() -> [String] { descendants(dashboard.view).compactMap { ($0 as? NSTextField)?.stringValue } }
+    let openButtons = buttons().filter { $0.title == "Open terminal" }
+    precondition(openButtons.count == 1, "Unsupported terminals must not offer a jump action")
+    openButtons[0].performClick(nil)
+    precondition(focused == "project", "Open button must target its own session")
+    buttons().first { $0.title == "Sound on" }!.performClick(nil)
+    precondition(muted, "Sound button must invoke mute")
+    dashboard.refresh(initial, muted: muted)
+    precondition(buttons().contains { $0.title == "Sound off" }, "Mute state must render")
+    buttons().first { $0.title == "Quit" }!.performClick(nil)
+    precondition(quit, "Quit must invoke termination callback")
+    let sameButton = buttons().first { $0.title == "Open terminal" }!
+    dashboard.refresh([session("project", "waiting", tokens: 200), initial[1]], muted: muted)
+    precondition(buttons().contains { $0 === sameButton }, "Usage ticks must preserve controls")
+    precondition(texts().contains { $0.contains("IN 200") }, "Usage must refresh without replacing rows")
+    dashboard.refresh([session("project", "working")], muted: muted)
+    precondition(texts().contains("Claude is on it") && !texts().contains("NEEDS INPUT"), "State groups must refresh")
+    dashboard.refresh([], muted: muted)
+    precondition(texts().contains("Ready when you are") && !texts().contains("project"), "Last ended session must reveal empty state")
+    let many = (0..<20).map { session("project-\($0)", "working") }
+    dashboard.refresh(many, muted: muted)
+    let scroll = dashboard.scroll
+    precondition(scroll.documentView!.frame.height > scroll.frame.height, "Overflow must scroll")
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 200))
+    dashboard.refresh(many + [session("new", "waiting")], muted: muted)
+    precondition(scroll.contentView.bounds.origin.y == 200, "New sessions must preserve scroll offset")
+    print("✓ Native UI checks passed: terminal action, unsupported terminals, sound, quit, live usage, stable controls, state transitions, empty state, overflow, scroll preservation")
 }
