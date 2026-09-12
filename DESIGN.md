@@ -79,3 +79,19 @@ recorded ask, a just-finished session, empty states, and overflow lists. Verify 
 finite flash, the steady working beacon, the completion cue, ordering, copy
 feedback, keyboard controls, and Reduce Motion. View-only screenshots cannot prove
 native popover placement or material; capture native chrome too.
+
+## Installation and settings
+
+The downloaded app has a permanent home in Applications. A first-run window shows
+which agent integrations were installed, reports failures with Check again, and
+explains Codex hook review without pretending to grant trust. Login launch is an
+explicit opt-in. Update checks have a visible preference; session data never
+enters the update request.
+
+The console keeps its three captioned controls. Its existing bird is also the
+Settings button, with a tooltip, accessibility label, and Command-comma shortcut.
+Opening AgentChirp again from Applications also opens Settings. This separate
+window owns setup, login launch, updates, and Open Codex. The launcher is included
+in setup; users choose a project, not an installation directory. Neither tool is
+required to install AgentChirp. Missing tools get installation links, and newly
+initialized tools are picked up automatically without restarting AgentChirp.

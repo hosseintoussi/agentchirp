@@ -49,74 +49,64 @@ Reduce Motion removes the flash.
 
 ## Install
 
-### Homebrew (recommended)
+Requires macOS 13 or later. One app runs on Apple Silicon and Intel Macs.
 
-```sh
-brew tap hosseintoussi/agentchirp
-brew install agentchirp
-brew services start agentchirp   # starts now and at every login
-```
+1. Download [AgentChirp.dmg](https://github.com/hosseintoussi/ccbeacon/releases/latest/download/AgentChirp.dmg).
+2. Drag **AgentChirp** into **Applications** and open it.
+3. Review the integration status in the welcome window. Enable **Launch AgentChirp at login** if you want it ready when you sign in.
 
-Installs a prebuilt universal binary — no compile step. On first launch AgentChirp
-installs its hook script and merges the hook entries into `~/.claude/settings.json`
-automatically, and keeps them up to date after every upgrade.
+The direct download becomes available with the first signed app release. Release
+apps are signed with Developer ID, notarized by Apple, and include the native
+hook helper. No Homebrew, Python, Xcode, or terminal installation commands are needed.
+macOS may show its normal confirmation the first time you open a downloaded app.
 
-### Update
+Claude Code hooks are configured automatically when its home directory is present.
+Codex requires you to review the installed entries in `/hooks`; AgentChirp never
+changes hook trust or approval policy. If neither tool is present, AgentChirp
+still installs and shows links to get Claude Code or Codex. Either one is enough.
+Install and open the tool once; AgentChirp detects its newly created home within
+10 seconds and configures the integration. **Check again** retries immediately.
+It does not install either agent or start a server while waiting for a tool.
 
-```sh
-brew update && brew upgrade agentchirp
-brew services restart agentchirp
-```
+### Settings and updates
+
+Click the bird at the left of the console header, press **⌘,** while the console
+is open, or open AgentChirp again from Applications to show Settings. There you
+can change launch at login, retry integration setup, and check for updates.
+
+AgentChirp checks for updates through Sparkle. Update archives are verified with
+both the app's code signature and a dedicated update signing key. Automatic
+checks can be turned off in Settings. An update check contacts GitHub; it never
+sends your sessions, prompts, paths, or transcripts.
 
 ### Build from source
 
-Requires macOS 13+ and Swift (via Xcode or Command Line Tools).
+Requires Swift (Xcode or Command Line Tools). Python 3 is used only by the
+packaging and test scripts on the developer's machine.
 
 ```sh
-git clone https://github.com/hosseintoussi/agentchirp.git
+git clone https://github.com/hosseintoussi/ccbeacon.git agentchirp
 cd agentchirp
 swift build -c release
 .build/release/agentchirp &
 ```
 
-The app configures its Claude Code hooks automatically on first launch (see [Hook setup](#hook-setup)).
-
----
-
-## Launch at login
-
-**Homebrew install:** `brew services start agentchirp` — Homebrew manages the LaunchAgent.
-
-**Built from source:** add a LaunchAgent manually:
+To build a local app bundle and preview its setup window without changing hooks,
+login items, or update preferences:
 
 ```sh
-cat > ~/Library/LaunchAgents/com.hosseintoussi.agentchirp.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.hosseintoussi.agentchirp</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/path/to/.build/release/agentchirp</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <false/>
-</dict>
-</plist>
-EOF
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hosseintoussi.agentchirp.plist
+python3 scripts/package_app.py --development
+dist/AgentChirp.app/Contents/MacOS/agentchirp --installation-check /tmp/agentchirp-setup
 ```
+
+See [RELEASING.md](RELEASING.md) for signing, notarization, DMG creation, and release credentials.
 
 ---
 
 ## Hook setup
 
-Automatic for every install method: at launch, AgentChirp installs (and keeps updated)
-`~/.claude/hooks/agentchirp.sh` and adds any missing hook entries to
+When Claude Code has been detected, AgentChirp installs (and keeps updated)
+`~/.claude/hooks/agentchirp.sh` and its native `agentchirp-hook` helper, and adds missing hook entries to
 `~/.claude/settings.json`. Existing entries are never modified — if you've customized
 an event's agentchirp hook, your version wins.
 
@@ -128,18 +118,23 @@ Codex sessions appear alongside Claude sessions, with a provider label, model, u
 and the same compact menu bar states. Tested against Codex CLI 0.154.0.
 
 For automatic clearing of amber as soon as an answer or approval is accepted,
-start new sessions with the optional `codex-chirp` launcher:
+start new sessions with **Open Codex…** or the included `codex-chirp` launcher:
+
+AgentChirp includes and automatically installs its Codex launcher as part of setup.
+Click **Open Codex…** in Settings, choose your project, and Codex opens in Terminal.
+There is no separate server download, launcher installation, or PATH configuration.
+The button is disabled until Codex has been detected and set up.
+
+If you prefer starting sessions from an existing terminal, the included launcher
+also works directly:
 
 ```sh
-# Install the launcher from the repository or extracted release:
-install -m 755 codex-chirp ~/.local/bin/codex-chirp
-# Start AgentChirp once, then:
-codex-chirp
-# Or resume an existing conversation through the shared server:
-codex-chirp resume --last
+"$HOME/Library/Application Support/AgentChirp/bin/codex-chirp"
+# Or resume an existing conversation:
+"$HOME/Library/Application Support/AgentChirp/bin/codex-chirp" resume --last
 ```
 
-Ensure `~/.local/bin` is on your PATH. The launcher starts Codex's local shared
+The launcher starts Codex's local shared
 App Server automatically and connects the terminal to it. AgentChirp reads live
 thread status about once per second, clears amber when work resumes, and checks
 that a request remains unanswered before playing its delayed sound. It never
@@ -207,4 +202,4 @@ A `flock`-based exclusive lock in the hook script prevents a race condition wher
 
 Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/agentchirp/sessions/`. The Codex adapter writes state under `$CODEX_HOME/agentchirp/sessions` (default `~/.codex`).
 Both adapters retain session metadata, not prompt or tool content. The app reads
-per-session token counts from your local transcript files. No data leaves your machine.
+per-session token counts from your local transcript files. Session data stays on your machine. If enabled, update checks contact GitHub to retrieve the release feed and update files; system profiling is disabled.

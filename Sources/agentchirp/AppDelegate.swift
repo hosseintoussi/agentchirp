@@ -1,6 +1,7 @@
 import Cocoa
 import IOKit.pwr_mgt
 import AgentChirpCore
+import ServiceManagement
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var statusItem: NSStatusItem!
@@ -27,10 +28,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private(set) var displaySleepAssertion: IOPMAssertionID?
     let popover = NSPopover()
     let dashboard = DashboardController()
+    private let updates = AppUpdates()
+    private var integrationResults: [IntegrationSetupResult] = []
+    private var setupWindow: SetupWindowController?
+    private var knownProviderHomes: Set<String> = []
+    private var nextIntegrationCheck = Date.distantPast
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        syncClaudeIntegration()
-        syncCodexIntegration()
+        guard prepareInstalledApplication() else { return }
+        if !isDevBuild, let other = NSRunningApplication.runningApplications(withBundleIdentifier: "com.hosseintoussi.agentchirp")
+            .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+                && $0.bundleURL?.resolvingSymlinksInPath() == Bundle.main.bundleURL.resolvingSymlinksInPath() }) {
+            other.activate(options: [.activateIgnoringOtherApps])
+            NSApp.terminate(nil)
+            return
+        }
+        integrationResults = syncIntegrations()
+        knownProviderHomes = detectedProviderHomes()
+        updates.start()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         popover.behavior = .transient
         popover.contentViewController = dashboard
@@ -43,12 +58,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         dashboard.onKeepAwake = { [weak self] in self?.toggleKeepAwake() }
         dashboard.keepAwake = keepAwake
         dashboard.onQuit = { NSApplication.shared.terminate(nil) }
+        dashboard.onSettings = { [weak self] in self?.showSettings() }
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.image = BeaconMark.image(size: 18)
         statusItem.button?.imagePosition = .imageOnly
         watchSessionsDir()
-        dashboard.watchedProviders = FileManager.default.fileExists(atPath: codexHome) ? [.claude, .codex] : [.claude]
+        dashboard.watchedProviders = integrationResults.filter { $0.installed }.map { $0.provider }
         update()
         // Keep elapsed times fresh while the user interacts with the console.
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
@@ -56,12 +72,121 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+        if !isDevBuild && (!UserDefaults.standard.bool(forKey: "setupCompleted") || integrationResults.contains(where: { $0.needsAttention })) {
+            showSettings()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if statusItem != nil { showSettings() }
+        return true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        setupWindow?.refreshPreferences()
+    }
+
+    @objc func showSettings() {
+        popover.performClose(nil)
+        if setupWindow == nil {
+            setupWindow = SetupWindowController(actions: SetupActions(
+                retry: { [weak self] in
+                    let results = syncIntegrations()
+                    self?.integrationResults = results
+                    self?.knownProviderHomes = self?.detectedProviderHomes() ?? []
+                    self?.watchSessionsDir()
+                    self?.dashboard.watchedProviders = results.filter { $0.installed }.map { $0.provider }
+                    return results
+                },
+                loginEnabled: { SMAppService.mainApp.status == .enabled },
+                loginMessage: loginStatusMessage,
+                setLogin: { enabled in
+                    guard !isDevBuild else { return }
+                    if enabled {
+                        if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+                        else {
+                            try SMAppService.mainApp.register()
+                            if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+                        }
+                    } else { try SMAppService.mainApp.unregister() }
+                },
+                updatesAvailable: updates.available,
+                updateMessage: updates.message,
+                automaticUpdates: { [weak self] in self?.updates.automatic ?? false },
+                setAutomaticUpdates: { [weak self] in self?.updates.automatic = $0 },
+                checkUpdates: { [weak self] in self?.updates.check() },
+                openCodex: { [weak self] window in self?.openCodex(from: window) },
+                getTool: { provider in
+                    let url = provider == .claude ? "https://code.claude.com/docs/en/quickstart" : "https://developers.openai.com/codex/cli/"
+                    NSWorkspace.shared.open(URL(string: url)!)
+                },
+                finish: { UserDefaults.standard.set(true, forKey: "setupCompleted") }
+            ))
+        }
+        setupWindow?.present(results: integrationResults, firstRun: !UserDefaults.standard.bool(forKey: "setupCompleted"))
+    }
+
+    private func detectedProviderHomes() -> Set<String> {
+        Set([NSHomeDirectory() + "/.claude", codexHome].filter { FileManager.default.fileExists(atPath: $0) })
+    }
+
+    private func checkForNewTools() {
+        guard Date() >= nextIntegrationCheck else { return }
+        nextIntegrationCheck = Date().addingTimeInterval(10)
+        let homes = detectedProviderHomes()
+        guard homes != knownProviderHomes else { return }
+        knownProviderHomes = homes
+        integrationResults = syncIntegrations()
+        dashboard.watchedProviders = integrationResults.filter { $0.installed }.map { $0.provider }
+        watchSessionsDir()
+        setupWindow?.refreshIntegrations(integrationResults)
+    }
+
+    private func openCodex(from window: NSWindow) {
+        let panel = NSOpenPanel()
+        panel.message = "Choose the project you want to work on in Codex."
+        panel.prompt = "Open Codex"
+        panel.canChooseFiles = false; panel.canChooseDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let project = panel.url else { return }
+            let command = codexTerminalCommand(project: project.path, launcher: codexLauncherURL().path, home: codexHome)
+            // Pass the shell command as an argument, never interpolate it into AppleScript.
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", """
+                on run argv
+                    tell application "Terminal"
+                        activate
+                        do script (item 1 of argv)
+                    end tell
+                end run
+                """, "--", command]
+            process.standardOutput = FileHandle.nullDevice
+            let errors = Pipe()
+            process.standardError = errors
+            process.terminationHandler = { completed in
+                guard completed.terminationStatus != 0 else { return }
+                let detail = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.messageText = "Could not open Codex in Terminal"
+                    alert.informativeText = detail
+                    alert.beginSheetModal(for: window)
+                }
+            }
+            do { try process.run() }
+            catch { NSAlert(error: error).beginSheetModal(for: window) }
+        }
     }
 
     // MARK: File watching
 
     func watchSessionsDir() {
+        watchers.forEach { $0.cancel() }
+        watchers.removeAll()
         for directory in [sessionsDir, codexSessionsDir] {
+            if directory == sessionsDir && !FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude") { continue }
             if directory == codexSessionsDir && !FileManager.default.fileExists(atPath: codexHome) { continue }
             try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
             let fd = open(directory, O_EVTONLY)
@@ -78,6 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: Update cycle
 
     func update() {
+        checkForNewTools()
         sessionStore.refresh { [weak self] sessions in
             guard let self else { return }
             self.sessions = sessions

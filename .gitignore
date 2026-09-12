@@ -2,3 +2,5 @@
 *.o
 .DS_Store
 /agentchirp
+/dist/
+__pycache__/

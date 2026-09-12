@@ -13,17 +13,24 @@ Sources/
     SessionRepository.swift Session loading, synchronized cleanup, background SessionStore
     TranscriptReader.swift Shared incremental JSONL transport with owned provider caches
     ConsoleSummary.swift Pure header presentation
-    IntegrationInstaller.swift Shared hook installation with observable errors
+    IntegrationInstaller.swift Shared atomic executable/hook installation with observable errors
+    HookAdapter.swift Native Claude/Codex hook transport, locking and ancestry
     CodexTokens.swift Incremental Codex cumulative token adapter
     Version.swift   appVersion constant + isDevBuild detection (path-based)
+  agentchirp-hook/    Native hook executable (no AppKit, no Python runtime)
   agentchirp/         AppKit menu bar app
     AppDelegate.swift  NSStatusItem, popover, notifications, file watching
     Dashboard.swift    Native session console, grouped rows, buttons, BeaconMark, adaptive surfaces
     Snapshot.swift     --snapshot flag: renders fixture consoles to PNGs for design review
+    Installation.swift First-run settings window, Applications placement and login items
+    Updates.swift      Sparkle updater; disabled in development bundles
+    AppIcon.swift      Installed icon rendered from BeaconMark
     main.swift         Entry point
 Tests/
   AgentChirpCoreTests/  Framework-free test runner (no XCTest needed)
-agentchirp.sh           Claude/Codex hook adapters — writes provider-specific state files
+agentchirp.sh           Thin shell adapter calling the bundled native helper
+Packaging/             Info.plist and Apple Events entitlement
+scripts/               App bundle, signing, notarization, DMG and update-feed tooling
 ```
 
 AppKit code lives only in `Sources/agentchirp/`. Everything testable goes in `AgentChirpCore`.
@@ -96,6 +103,7 @@ run the normal application launch or modify Claude settings.
 ## Test
 
 ```sh
+swift build -c release # builds the native helper used by hook tests
 swift run AgentChirpTests
 python3 Tests/Hooks/test_codex.py
 python3 Tests/Hooks/test_claude.py
@@ -103,6 +111,9 @@ python3 Tests/Release/test_release.py
 python3 Tests/CodexRuntime/test_runtime.py # requires release build
 python3 Tests/CodexRuntime/test_launcher.py
 bash -n agentchirp.sh
+python3 scripts/package_app.py --development
+python3 Tests/Release/test_bundle.py dist/AgentChirp.app
+dist/AgentChirp.app/Contents/MacOS/agentchirp --installation-check /tmp/agentchirp-setup
 ```
 
 No testing framework required — runs with Command Line Tools alone (no Xcode needed).
@@ -112,10 +123,12 @@ truncation), and `loadSessions` (state resolution, staleness, PID recycling, sor
 
 ## Hook script setup (required to see sessions)
 
-Automatic: `syncClaudeIntegration()` (`Sources/agentchirp/Setup.swift`) runs at every
-launch. It copies the bundled `agentchirp.sh` to `~/.claude/hooks/` when contents differ
-(dev builds resolve it from the repo root, Homebrew builds from the keg's `libexec`)
-and merges any missing hook entries into `~/.claude/settings.json` via
+Automatic: `syncIntegrations()` (`Sources/agentchirp/Setup.swift`) runs at every
+launch for detected provider homes. It copies the bundled `agentchirp.sh` and native
+`agentchirp-hook` to `~/.claude/hooks/` when contents differ. Release bundles resolve
+resources from Contents/Resources and the helper from Contents/MacOS; source builds
+resolve the script from the repo root and helper beside the executable. Setup
+merges any missing hook entries into `~/.claude/settings.json` via
 `mergedHookSettings()` in AgentChirpCore. Events that already contain a agentchirp entry
 are never modified.
 
@@ -123,23 +136,23 @@ Claude events: SessionStart → idle, UserPromptSubmit → working, PreToolUse �
 Notification (permission_prompt, elicitation_dialog) → waiting, Stop/StopFailure → done,
 SessionEnd removes the file. `resume` is how a granted permission becomes "working"
 immediately: PreToolUse fires when the approved tool starts. Because it also fires
-for every other tool call, the shell exits before Python unless the session file
+for every other tool call, the shell exits before launching the native helper unless the session file
 currently says waiting; the writer rechecks under the lock before resuming. A repeated
 state keeps its `ts`, so clocks measure time in the current state. Hooks persist
 `last_event`; only Stop is successful completion. Startup, StopFailure, and Interrupt
 never produce a completion sound or green tint.
 
-This lives in the app — NOT in the Homebrew formula — because `post_install` runs in
-Homebrew's sandbox with a fake `$HOME` and cannot write the user's real `~/.claude`.
-Note: launching a dev build overwrites the user-installed hook with the repo version.
+The app owns integration setup and reports failures in its setup window. Starting a
+development executable still updates the user's installed hooks; snapshot, UI,
+icon-export and installation-check modes skip normal launch and never do setup.
 
 ## Codex integration
 
-`syncCodexIntegration()` installs the same bundled script under `$CODEX_HOME/hooks`
+`syncIntegrations()` installs the same bundled script under `$CODEX_HOME/hooks`
 and merges the Codex-specific hooks into `hooks.json`. Default home: `~/.codex`.
 Never write hook trust or approval settings; the user reviews definitions in `/hooks`.
 The bundled script takes `codex <state-directory>` for the Codex adapter, keeping
-existing release/Homebrew packaging intact. Hooks always return `{}` and never
+the shell entry point stable across updates. Hooks always return `{}` and never
 make approval or continuation decisions.
 
 `loadAllSessions()` combines Claude and Codex directories. Codex IDs are namespaced,
@@ -161,45 +174,36 @@ preserves metadata and clocks, and falls back to hooks on disconnection. Live
 status permits delayed permission sounds; validation rechecks it before playback.
 `--codex-status` is a read-only diagnostic that skips application setup.
 
-## Releasing a new version
+## Native app installation and releases
 
-1. Add a `## [X.Y.Z] - YYYY-MM-DD` section at the top of `CHANGELOG.md`
-2. Bump `appVersion` in `Sources/AgentChirpCore/Version.swift`
-3. Commit and tag:
-   ```sh
-   git commit -am "Bump to vX.Y.Z"
-   git tag vX.Y.Z
-   git push origin main vX.Y.Z
-   ```
+See `RELEASING.md` for credential setup and exact local/CI commands. The single
+prebuilt distribution is a universal Developer ID Application signed, notarized,
+stapled `AgentChirp.app` inside `AgentChirp.dmg`. The same stapled app is zipped
+and Ed25519 signed for Sparkle. No Homebrew packaging or migration is maintained.
 
-The release workflow (`.github/workflows/release.yml`) is triggered automatically once CI
-passes on the pushed commit. It will:
-- Check out the exact successful upstream main-push CI SHA, detect its version tag,
-  and verify that the tag and appVersion match the checkout
-- Extract the matching `## [X.Y.Z]` section from `CHANGELOG.md` as the release body
-- Build a universal (arm64 + x86_64) binary and attach `agentchirp-vX.Y.Z-macos.tar.gz`
-  (binary + hook script) to the GitHub release
-- Point the Homebrew tap formula at the binary asset and update its SHA256
+`python3 scripts/package_app.py --development` builds a local preview bundle.
+Production packaging requires `DEVELOPER_ID_APPLICATION`. The public Sparkle key
+is in Packaging/Info.plist; its private counterpart lives in the agentchirp Keychain account.
+The release workflow still waits for successful main-push CI, checks out that exact
+SHA, and requires a matching version tag and appVersion before publishing.
+Bump appVersion and add a dated changelog section before tagging a new release.
+Never publish a development bundle or an unstapled archive as an official release.
 
-**If CI fails, the release will not run.**
-
-
-## Homebrew tap
-
-The tap lives at `github.com/hosseintoussi/homebrew-agentchirp`.
-Formula: `Formula/agentchirp.rb` — install command: `brew tap hosseintoussi/agentchirp && brew install agentchirp`.
-
-To manually update the formula after a release (if the workflow didn't run):
-```sh
-cd /path/to/homebrew-agentchirp
-# update url and sha256 in Formula/agentchirp.rb
-git commit -am "agentchirp vX.Y.Z"
-git push
-```
+The first-run window owns integration results/retry, explicit login opt-in via
+`SMAppService.mainApp`, update preferences and Open Codex. Codex setup automatically
+installs the bundled launcher in ~/Library/Application Support/AgentChirp/bin.
+Open Codex chooses a project and passes a safely quoted command as an osascript
+argument to Terminal; it does not edit shell profiles or PATH. Only an explicit
+launch starts Codex's own server. Provider home changes are checked every 10 seconds;
+missing tools show get-tool links and never create provider homes or block setup.
+The console's bird opens Settings; Command-comma and Finder reopen do too. The
+console retains its three captioned controls and live popover sizing contract.
+Development bundles do not start Sparkle or register login items. `--installation-check`
+uses injected actions and exercises real controls without touching user setup.
 
 ## Key implementation details
 
-- **False notification prevention:** `fcntl.flock(LOCK_EX)` in `agentchirp.sh` serializes
+- **False notification prevention:** `flock(LOCK_EX)` in `HookAdapter.swift` serializes
   concurrent hook processes using 64 persistent SHA-256 bucket locks under `.locks`.
   Never unlink these locks. Both adapters share locking, atomic writes, and ancestry
   discovery; provider event handling remains separate. Cleanup acquires the same lock

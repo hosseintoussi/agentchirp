@@ -16,7 +16,7 @@ func renderMenuSnapshots(to dir: String) {
         Session(id: "s2", state: "working", ts: now - 2_115, cwd: "/Users/dev/code/agentchirp",
                 transcriptPath: "", totalTokens: 1_432_000, inputTokens: 84_200, outputTokens: 41_700,
                 cacheTokens: 1_306_100, model: "gpt-6-astra", tty: "/dev/ttys007", terminal: "iTerm2", provider: .codex),
-        Session(id: "s3", state: "idle", ts: now - 7_300, cwd: "/Users/dev/code/homebrew-agentchirp",
+        Session(id: "s3", state: "idle", ts: now - 7_300, cwd: "/Users/dev/code/agentchirp-site",
                 transcriptPath: "", totalTokens: 52_300, inputTokens: 4_100, outputTokens: 2_900,
                 cacheTokens: 45_300, model: "claude-sonnet-4-6", tty: "", terminal: ""),
     ]

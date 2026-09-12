@@ -345,6 +345,7 @@ final class DashboardController: NSViewController {
     var onMute: (() -> Void)?
     var onKeepAwake: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onSettings: (() -> Void)?
     /// Whether the app holds the Mac awake while sessions work; drives the header button.
     var keepAwake = true
 
@@ -438,10 +439,15 @@ final class DashboardController: NSViewController {
         rule.tint = neutralFill(0.1)
         rule.autoresizingMask = [.width]
         header.addSubview(rule)
-        let mark = BeaconMark(frame: NSRect(x: 16, y: 18, width: 20, height: 20))
-        mark.color = summary.markColor
-        mark.setAccessibilityElement(false)
+        let mark = NSButton(image: BeaconMark.image(size: 20, color: summary.markColor), target: self, action: #selector(openSettings))
+        mark.frame = NSRect(x: 12, y: 12, width: 28, height: 32)
+        mark.isBordered = false
+        mark.toolTip = "AgentChirp Settings · ⌘,"
+        mark.setAccessibilityLabel("AgentChirp Settings")
+        mark.keyEquivalent = ","
+        mark.keyEquivalentModifierMask = .command
         header.addSubview(mark)
+        focusButtons["settings"] = mark
         label(summary.headline, in: header, x: 44, y: 11, w: 196, size: 13, weight: .semibold,
               color: summary.headlineColor)
         label(summary.subline, in: header, x: 44, y: 30, w: 196, size: 11, color: .secondaryLabelColor)
@@ -483,8 +489,8 @@ final class DashboardController: NSViewController {
             }
         }
         if sessions.isEmpty {
-            label("Ready when you are", in: document, x: 32, y: 24, w: 340, size: 13, weight: .medium)
-            label("Start a task in Claude Code or Codex and it appears here.",
+            label(watchedProviders.isEmpty ? "Set up your agents" : "Ready when you are", in: document, x: 32, y: 24, w: 340, size: 13, weight: .medium)
+            label(watchedProviders.isEmpty ? "Click the bird above to open Settings." : "Start a task in Claude Code or Codex and it appears here.",
                   in: document, x: 32, y: 46, w: 340, size: 12, color: .secondaryLabelColor)
         }
         if let focusedID {
@@ -496,6 +502,7 @@ final class DashboardController: NSViewController {
 
     @objc func toggleSounds() { onMute?() }
     @objc func quitApp() { onQuit?() }
+    @objc func openSettings() { onSettings?() }
 
     private func displayName(_ session: Session) -> String {
         let duplicate = currentSessions.filter { $0.dirName == session.dirName }.count > 1

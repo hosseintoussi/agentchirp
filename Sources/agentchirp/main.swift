@@ -15,6 +15,16 @@ if CommandLine.arguments.contains("--codex-status") {
 
 let app = NSApplication.shared
 
+if let index = CommandLine.arguments.firstIndex(of: "--installation-check") {
+    checkInstallation(to: CommandLine.arguments.count > index + 1 ? CommandLine.arguments[index + 1] : nil)
+    exit(0)
+}
+
+if let index = CommandLine.arguments.firstIndex(of: "--export-icon"), CommandLine.arguments.count > index + 1 {
+    exportAppIcon(to: CommandLine.arguments[index + 1])
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--ui-check") {
     checkDashboardInteractions()
     exit(0)

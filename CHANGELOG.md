@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Native installation
+- Missing agents no longer require manual setup: installation links and automatic detection handle either tool arriving later without blocking AgentChirp
+- Added a Developer ID signed app bundle, Apple notarization and stapling, and a drag-to-Applications DMG release pipeline; removed the Homebrew release path
+- Added a first-run setup window with integration results, retry, launch at login, automatic Codex launcher setup and an Open Codex action, and built-in Sparkle updates
+- Replaced the Python hook runtime with a bundled Swift helper, preserving session state, privacy, atomic writes, and shared bucket locks
+- Added signed update archive verification, clean-home bundle checks, and native setup interaction/layout checks
+
 ### AgentChirp
 - Renamed the app and executable to AgentChirp / `agentchirp`, with a native bird-and-beam mark
 - Added `codex-chirp`; renamed the hooks, modules, session directories, and release artifacts consistently

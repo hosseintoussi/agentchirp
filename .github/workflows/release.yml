@@ -5,6 +5,10 @@ on:
     workflows: [CI]
     types: [completed]
 
+concurrency:
+  group: signed-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -33,55 +37,65 @@ jobs:
           fi
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Extract changelog
+      - name: Prepare signing credentials
         if: steps.tag.outputs.name != ''
-        id: changelog
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          DEVELOPER_ID_APPLICATION: ${{ vars.DEVELOPER_ID_APPLICATION }}
         run: |
-          VERSION="${{ steps.tag.outputs.name }}"
-          VERSION="${VERSION#v}"
-          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
-          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$NOTES" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          python3 scripts/ci_credentials.py
 
-      - name: Build universal binary
+      - name: Build signed universal app
         if: steps.tag.outputs.name != ''
-        id: dist
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ vars.DEVELOPER_ID_APPLICATION }}
+        run: python3 scripts/package_app.py
+
+      - name: Verify bundled app before notarization
+        if: steps.tag.outputs.name != ''
         run: |
-          TAG="${{ steps.tag.outputs.name }}"
-          # --product: the multi-arch (xcbuild) path compiles every target as a library,
-          # which breaks the top-level-code test runner; only the app binary is needed.
-          swift build -c release --arch arm64 --arch x86_64 --product agentchirp
-          mkdir dist
-          cp .build/apple/Products/Release/agentchirp agentchirp.sh codex-chirp dist/
-          tar -czf "agentchirp-${TAG}-macos.tar.gz" -C dist agentchirp agentchirp.sh codex-chirp
-          echo "sha=$(shasum -a 256 agentchirp-${TAG}-macos.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          python3 Tests/Release/test_bundle.py dist/AgentChirp.app
+          dist/AgentChirp.app/Contents/MacOS/agentchirp --ui-check
+          dist/AgentChirp.app/Contents/MacOS/agentchirp --installation-check
+
+      - name: Notarize and package
+        if: steps.tag.outputs.name != ''
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ vars.DEVELOPER_ID_APPLICATION }}
+        run: |
+          python3 -m venv .build/packaging-venv
+          .build/packaging-venv/bin/pip install -r Packaging/requirements.txt
+          python3 scripts/distribute.py --notary-profile agentchirp-release --identity "$DEVELOPER_ID_APPLICATION"
+          python3 Tests/Release/test_dmg.py
+
+      - name: Generate signed update feed and release notes
+        if: steps.tag.outputs.name != ''
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          python3 scripts/sparkle_tools.py
+          python3 scripts/appcast.py "dist/AgentChirp-${RELEASE_TAG#v}.zip" --key-file "$RUNNER_TEMP/sparkle-private-key"
+          python3 Tests/Release/test_update_signature.py "dist/AgentChirp-${RELEASE_TAG#v}.zip"
+          python3 -c 'import sys; sys.path.insert(0, "scripts"); from appcast import changelog; from package_app import version; print(changelog(version()))' > dist/release-notes.md
 
       - name: Create GitHub release
         if: steps.tag.outputs.name != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
-          body: ${{ steps.changelog.outputs.notes }}
-          files: agentchirp-*.tar.gz
+          body_path: dist/release-notes.md
+          fail_on_unmatched_files: true
+          make_latest: legacy
+          files: |
+            dist/AgentChirp.dmg
+            dist/AgentChirp-*.zip
+            dist/appcast.xml
 
-      - name: Bump Homebrew formula
-        if: steps.tag.outputs.name != ''
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          TAG="${{ steps.tag.outputs.name }}"
-          TARBALL="https://github.com/${{ github.repository }}/releases/download/${TAG}/agentchirp-${TAG}-macos.tar.gz"
-          SHA256="${{ steps.dist.outputs.sha }}"
-
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/hosseintoussi/homebrew-agentchirp.git" /tmp/tap
-          cd /tmp/tap
-
-          sed -i '' "s|url \".*\"|url \"${TARBALL}\"|"     Formula/agentchirp.rb
-          sed -i '' "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/agentchirp.rb
-
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name  "github-actions[bot]"
-          git add Formula/agentchirp.rb
-          git diff --cached --quiet || git commit -m "agentchirp ${TAG}"
-          git push
+      - name: Remove temporary signing credentials
+        if: always() && steps.tag.outputs.name != ''
+        run: python3 scripts/ci_credentials.py --cleanup

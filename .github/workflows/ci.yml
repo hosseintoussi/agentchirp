@@ -27,3 +27,13 @@ jobs:
 
       - name: Native UI and popover layout regressions
         run: .build/release/agentchirp --ui-check
+
+      - name: App bundle and installation checks
+        run: |
+          python3 scripts/package_app.py --development
+          python3 Tests/Release/test_bundle.py dist/AgentChirp.app
+          dist/AgentChirp.app/Contents/MacOS/agentchirp --installation-check
+          python3 -m venv .build/packaging-venv
+          .build/packaging-venv/bin/pip install -r Packaging/requirements.txt
+          python3 scripts/distribute.py --development
+          python3 Tests/Release/test_dmg.py

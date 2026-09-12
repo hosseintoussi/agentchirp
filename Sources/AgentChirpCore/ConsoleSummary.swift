@@ -17,8 +17,13 @@ public struct ConsoleSummary {
         finishedName = sessions.filter { $0.finished(within: Self.completionWindow, now: now) }
             .max { $0.ts < $1.ts }?.dirName
         func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
-        let watchingLine = watching.contains(.codex)
-            ? "Watching Claude Code and Codex" : "Watching Claude Code · Codex not installed"
+        let watchingLine: String
+        switch (watching.contains(.claude), watching.contains(.codex)) {
+        case (true, true): watchingLine = "Watching Claude Code and Codex"
+        case (true, false): watchingLine = "Watching Claude Code · Codex not installed"
+        case (false, true): watchingLine = "Watching Codex"
+        case (false, false): watchingLine = "Open Settings to set up agents"
+        }
         if waiting > 0 {
             headline = "\(waiting) need\(waiting == 1 ? "s" : "") input"
             let rest = [working > 0 ? "\(working) working" : nil, idle > 0 ? "\(idle) idle" : nil]

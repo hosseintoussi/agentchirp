@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleIdentifier</key><string>com.hosseintoussi.agentchirp</string>
+    <key>CFBundleName</key><string>AgentChirp</string>
+    <key>CFBundleDisplayName</key><string>AgentChirp</string>
+    <key>CFBundleExecutable</key><string>agentchirp</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>AgentChirp</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>AgentChirp brings the terminal session you click to the front.</string>
+    <key>SUFeedURL</key><string>https://github.com/hosseintoussi/ccbeacon/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>QcztTI2mLIqdD/Lmw/JFSALUy5cKpn9zkj2PTzoVjjc=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUAutomaticallyUpdate</key><false/>
+    <key>SUEnableSystemProfiling</key><false/>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+</dict></plist>

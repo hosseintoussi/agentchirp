@@ -458,10 +458,15 @@ suite("Synchronized cleanup") {
 suite("Integration installation") {
     let home = makeTmpDir("integration")
     let script = Data("#!/bin/sh\n".utf8)
+    let helper = Data("native helper fixture".utf8)
     let config = home + "/settings.json"
     let original = Data("{\"theme\":\"dark\"}".utf8)
     try! original.write(to: URL(fileURLWithPath: config))
-    try! installIntegration(home: home, configName: "settings.json", script: script, merge: mergedHookSettings)
+    try! installIntegration(home: home, configName: "settings.json", script: script, helper: helper, merge: mergedHookSettings)
+    let helperPath = home + "/hooks/agentchirp-hook"
+    expect(FileManager.default.contents(atPath: helperPath) == helper, true, "native helper is installed alongside the adapter")
+    expect((try! FileManager.default.attributesOfItem(atPath: helperPath)[.posixPermissions] as! NSNumber).intValue, 0o755,
+           "native helper is executable when published")
     let installed = FileManager.default.contents(atPath: config)!
     let settings = try! JSONSerialization.jsonObject(with: installed) as! [String: Any]
     expect(settings["theme"] as? String ?? "", "dark", "installation preserves unrelated settings")
@@ -577,6 +582,11 @@ suite("Codex live runtime status") {
     expect(CodexRuntimeThread(["id": "live", "status": ["type": "notLoaded"]]) == nil, true, "unloaded status is not working")
     expect(CodexRuntimeThread(["id": "live", "status": ["type": "active", "activeFlags": ["futureFlag"]]]) == nil, true,
            "unknown flags never imply an answered request")
+}
+
+suite("Installation readiness") {
+    expect(ConsoleSummary([], watching: []).subline, "Open Settings to set up agents", "empty install does not claim an agent is connected")
+    expect(ConsoleSummary([], watching: [.codex]).subline, "Watching Codex", "Codex-only install does not claim Claude is installed")
 }
 
 try? FileManager.default.removeItem(atPath: tmpRoot)
