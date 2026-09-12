@@ -19,7 +19,7 @@ class ReleaseTests(unittest.TestCase):
         self.git("init", "-q")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
-        self.version = self.repo / "Sources/CCBeaconCore/Version.swift"
+        self.version = self.repo / "Sources/AgentChirpCore/Version.swift"
         self.version.parent.mkdir(parents=True)
         self.commit("1.0.0")
 

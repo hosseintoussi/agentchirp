@@ -55,7 +55,7 @@ public final class CodexRuntimeClient {
                 connection.begin(timeout: 1)
                 try connection.connect(path: socketPath)
                 socket = connection
-                _ = try call("initialize", params: ["clientInfo": ["name": "ccbeacon_monitor", "version": appVersion]])
+                _ = try call("initialize", params: ["clientInfo": ["name": "agentchirp_monitor", "version": appVersion]])
                 try connection.sendJSON(["method": "initialized"])
             }
             socket?.begin(timeout: 1)

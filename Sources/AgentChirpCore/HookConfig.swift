@@ -1,7 +1,7 @@
 import Foundation
 
-// The hook entries ccbeacon needs in ~/.claude/settings.json.
-private let hookCommand = "~/.claude/hooks/ccbeacon.sh"
+// The hook entries agentchirp needs in ~/.claude/settings.json.
+private let hookCommand = "~/.claude/hooks/agentchirp.sh"
 private let desiredHooks: [(event: String, matcher: String?, state: String)] = [
     ("SessionStart",     nil,                   "idle"),
     ("UserPromptSubmit", nil,                   "working"),
@@ -13,8 +13,8 @@ private let desiredHooks: [(event: String, matcher: String?, state: String)] = [
     ("SessionEnd",       nil,                   "done"),
 ]
 
-// Returns settings with ccbeacon's hook entries added, or nil if nothing is missing.
-// An event that already has any ccbeacon entry is left exactly as the user configured
+// Returns settings with agentchirp's hook entries added, or nil if nothing is missing.
+// An event that already has any agentchirp entry is left exactly as the user configured
 // it; entries for other tools are never touched.
 public func mergedHookSettings(_ settings: [String: Any]) -> [String: Any]? {
     guard settings["hooks"] == nil || settings["hooks"] is [String: Any] else { return nil }
@@ -27,7 +27,7 @@ public func mergedHookSettings(_ settings: [String: Any]) -> [String: Any]? {
         var entries = hooks[event] as? [[String: Any]] ?? []
         guard !entries.contains(where: { entry in
             (entry["hooks"] as? [[String: Any]] ?? []).contains {
-                ($0["command"] as? String ?? "").contains("ccbeacon.sh")
+                ($0["command"] as? String ?? "").contains("agentchirp.sh")
             }
         }) else { continue }
         for d in desiredHooks where d.event == event {
@@ -51,7 +51,7 @@ public func mergedCodexHookSettings(_ settings: [String: Any], home: String) -> 
     func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'" }
     guard settings["hooks"] == nil || settings["hooks"] is [String: Any] else { return nil }
     var hooks = settings["hooks"] as? [String: Any] ?? [:]
-    let command = quote(home + "/hooks/ccbeacon.sh") + " codex " + quote(home + "/ccbeacon/sessions")
+    let command = quote(home + "/hooks/agentchirp.sh") + " codex " + quote(home + "/agentchirp/sessions")
     let events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "Interrupt", "SessionEnd"]
     var changed = false
     for event in events {
@@ -59,7 +59,7 @@ public func mergedCodexHookSettings(_ settings: [String: Any], home: String) -> 
         var entries = hooks[event] as? [[String: Any]] ?? []
         let exists = entries.contains { entry in
             (entry["hooks"] as? [[String: Any]] ?? []).contains {
-                ($0["command"] as? String ?? "").contains("ccbeacon.sh")
+                ($0["command"] as? String ?? "").contains("agentchirp.sh")
             }
         }
         guard !exists else { continue }

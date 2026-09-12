@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "ccbeacon.sh"
+SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "agentchirp.sh"
 
 
 class CodexHookTests(unittest.TestCase):

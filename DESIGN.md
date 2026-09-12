@@ -1,13 +1,15 @@
 # DESIGN.md
 
-# ccbeacon: does an agent need me, and where do I go?
+# AgentChirp: does an agent need me, and where do I go?
 
-ccbeacon is a local monitor for Claude Code and Codex sessions, not a transcript
+AgentChirp is a local monitor for Claude Code and Codex sessions, not a transcript
 viewer. Every surface answers those two questions first and stays out of the way
 otherwise. Mode: Operate. Native macOS conventions outrank expression.
 
 ## The signal
 
+- The mark is an upright bird silhouette beneath two rounded beam arcs, which
+  also read as chirps. No eye, feet, or feather details; it must read at 18 points.
 - The menu bar beacon is calm. It signals state; it does not animate all day.
   - Resting: the neutral template mark, steady.
   - Working: the same mark breathing slowly (75% and back every 1.4 seconds). The
@@ -20,7 +22,7 @@ otherwise. Mode: Operate. Native macOS conventions outrank expression.
   Sounds can be turned off with the speaker button in the console header. Answered
   requests cancel their pending sound. Standalone Codex permissions stay visual-only because
   approval resolution is not separately observable through its hooks. Sessions
-  started with `codex-beacon` use live shared-server status to clear amber and
+  started with `codex-chirp` use live shared-server status to clear amber and
   cancel answered alerts on the next refresh.
 
 ## One orange

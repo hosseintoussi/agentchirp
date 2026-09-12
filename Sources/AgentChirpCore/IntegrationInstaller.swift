@@ -11,7 +11,7 @@ public func installIntegration(home: String, configName: String, script: Data,
                                merge: ([String: Any]) -> [String: Any]?) throws {
     let hooks = home + "/hooks"
     try fm.createDirectory(atPath: hooks, withIntermediateDirectories: true)
-    let destination = hooks + "/ccbeacon.sh"
+    let destination = hooks + "/agentchirp.sh"
     if fm.contents(atPath: destination) != script {
         try script.write(to: URL(fileURLWithPath: destination), options: .atomic)
     }

@@ -5,7 +5,7 @@ if [ "${1:-}" = launch-codex ]; then
   set -e
   for argument in "$@"; do
     case "$argument" in
-      --remote|--remote=*) printf '%s\n' 'codex-beacon selects the local shared server; omit --remote.' >&2; exit 2 ;;
+      --remote|--remote=*) printf '%s\n' 'codex-chirp selects the local shared server; omit --remote.' >&2; exit 2 ;;
     esac
   done
   server=$(codex app-server daemon start)
@@ -19,10 +19,10 @@ fi
 # One bundled adapter; no approval or continuation decisions.
 provider=claude
 state="${1:-}"
-directory="$HOME/.claude/cc-sessions"
+directory="$HOME/.claude/agentchirp/sessions"
 if [ "$state" = codex ]; then
   provider=codex
-  directory="${2:-${CODEX_HOME:-$HOME/.codex}/ccbeacon/sessions}"
+  directory="${2:-${CODEX_HOME:-$HOME/.codex}/agentchirp/sessions}"
 fi
 TTY=/dev/tty
 

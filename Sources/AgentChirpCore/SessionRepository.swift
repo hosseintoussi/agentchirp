@@ -194,7 +194,7 @@ public func loadAllSessions(claudeDir: String = sessionsDir, codexDir: String = 
 
 /// Coalesces refresh requests and publishes snapshots on the main queue.
 public final class SessionStore {
-    private let queue = DispatchQueue(label: "ccbeacon.sessions", qos: .utility)
+    private let queue = DispatchQueue(label: "agentchirp.sessions", qos: .utility)
     private let repository: SessionRepository
     private let claudeDirectory: String
     private let codexDirectory: String

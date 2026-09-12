@@ -1,6 +1,6 @@
 import Cocoa
 import IOKit.pwr_mgt
-import CCBeaconCore
+import AgentChirpCore
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var statusItem: NSStatusItem!
@@ -178,7 +178,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             : working > 0 ? "\(working) working" : justFinished ? "Just finished" : idle > 0 ? "All quiet" : "Nothing running"
         let parts = [state, working > 0 && waiting > 0 ? "\(working) working" : nil,
                      idle > 0 && (waiting > 0 || working > 0) ? "\(idle) idle" : nil].compactMap { $0 }
-        button.toolTip = "ccbeacon · " + parts.joined(separator: " · ")
+        button.toolTip = "\(appName) · " + parts.joined(separator: " · ")
         button.setAccessibilityLabel(button.toolTip)
     }
 
@@ -300,7 +300,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 var id = IOPMAssertionID(0)
                 let result = IOPMAssertionCreateWithName(
                     type, IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                    "ccbeacon: an agent session is active" as CFString, &id)
+                    "AgentChirp: an agent session is active" as CFString, &id)
                 if result == kIOReturnSuccess { assertion = id }
             } else if !wanted, let id = assertion {
                 IOPMAssertionRelease(id)

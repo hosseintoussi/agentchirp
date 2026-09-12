@@ -1,5 +1,5 @@
 import Cocoa
-import CCBeaconCore
+import AgentChirpCore
 
 // Read-only diagnostic: does not launch the menu app or install hooks.
 if CommandLine.arguments.contains("--codex-status") {

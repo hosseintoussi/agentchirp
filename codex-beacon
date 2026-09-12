@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# The hook is installed/refreshed by ccbeacon at launch; ordinary `codex` is unchanged.
-set -e
-adapter="${CODEX_HOME:-$HOME/.codex}/hooks/ccbeacon.sh"
-if [ ! -x "$adapter" ]; then
-  printf '%s\n' 'Start ccbeacon once to install its Codex integration, then retry codex-beacon.' >&2
-  exit 1
-fi
-exec "$adapter" launch-codex "$@"

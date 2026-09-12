@@ -1,4 +1,6 @@
-# ccbeacon
+# AgentChirp
+
+![AgentChirp bird-and-beam mark in light and dark appearances](assets/agentchirp-preview.png)
 
 A macOS menu bar app that tells you when your Claude Code and Codex agents need attention — without you having to go look.
 
@@ -10,7 +12,7 @@ But you have no idea when it finishes. Or when it hits a decision point and is w
 
 ## What it does
 
-ccbeacon sits in your menu bar and watches your active Claude Code and Codex sessions. You see exactly what's happening across every session, from any app, at a glance.
+AgentChirp sits in your menu bar and watches your active Claude Code and Codex sessions. You see exactly what's happening across every session, from any app, at a glance.
 
 | State | Menu bar |
 |-------|----------|
@@ -36,7 +38,7 @@ and the row says "Copied". Arrow keys move between rows, Return opens the select
 session, Escape dismisses the popover. Live updates reorder the list in place without
 resizing the open popover.
 
-While any session is working, ccbeacon keeps your Mac from going to sleep (the
+While any session is working, AgentChirp keeps your Mac from going to sleep (the
 display stays on). Three captioned buttons sit at the top right: Awake turns
 that off (it then reads May sleep), Sounds toggles sounds, Quit quits (hover it for
 the version).
@@ -50,20 +52,20 @@ Reduce Motion removes the flash.
 ### Homebrew (recommended)
 
 ```sh
-brew tap hosseintoussi/ccbeacon
-brew install ccbeacon
-brew services start ccbeacon   # starts now and at every login
+brew tap hosseintoussi/agentchirp
+brew install agentchirp
+brew services start agentchirp   # starts now and at every login
 ```
 
-Installs a prebuilt universal binary — no compile step. On first launch ccbeacon
+Installs a prebuilt universal binary — no compile step. On first launch AgentChirp
 installs its hook script and merges the hook entries into `~/.claude/settings.json`
 automatically, and keeps them up to date after every upgrade.
 
 ### Update
 
 ```sh
-brew update && brew upgrade ccbeacon
-brew services restart ccbeacon
+brew update && brew upgrade agentchirp
+brew services restart agentchirp
 ```
 
 ### Build from source
@@ -71,10 +73,10 @@ brew services restart ccbeacon
 Requires macOS 13+ and Swift (via Xcode or Command Line Tools).
 
 ```sh
-git clone https://github.com/hosseintoussi/ccbeacon.git
-cd ccbeacon
+git clone https://github.com/hosseintoussi/agentchirp.git
+cd agentchirp
 swift build -c release
-.build/release/ccbeacon &
+.build/release/agentchirp &
 ```
 
 The app configures its Claude Code hooks automatically on first launch (see [Hook setup](#hook-setup)).
@@ -83,21 +85,21 @@ The app configures its Claude Code hooks automatically on first launch (see [Hoo
 
 ## Launch at login
 
-**Homebrew install:** `brew services start ccbeacon` — Homebrew manages the LaunchAgent.
+**Homebrew install:** `brew services start agentchirp` — Homebrew manages the LaunchAgent.
 
 **Built from source:** add a LaunchAgent manually:
 
 ```sh
-cat > ~/Library/LaunchAgents/com.hosseintoussi.ccbeacon.plist << 'EOF'
+cat > ~/Library/LaunchAgents/com.hosseintoussi.agentchirp.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.hosseintoussi.ccbeacon</string>
+  <string>com.hosseintoussi.agentchirp</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/path/to/.build/release/ccbeacon</string>
+    <string>/path/to/.build/release/agentchirp</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -106,17 +108,17 @@ cat > ~/Library/LaunchAgents/com.hosseintoussi.ccbeacon.plist << 'EOF'
 </dict>
 </plist>
 EOF
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hosseintoussi.ccbeacon.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hosseintoussi.agentchirp.plist
 ```
 
 ---
 
 ## Hook setup
 
-Automatic for every install method: at launch, ccbeacon installs (and keeps updated)
-`~/.claude/hooks/ccbeacon.sh` and adds any missing hook entries to
+Automatic for every install method: at launch, AgentChirp installs (and keeps updated)
+`~/.claude/hooks/agentchirp.sh` and adds any missing hook entries to
 `~/.claude/settings.json`. Existing entries are never modified — if you've customized
-an event's ccbeacon hook, your version wins.
+an event's agentchirp hook, your version wins.
 
 ---
 
@@ -126,34 +128,34 @@ Codex sessions appear alongside Claude sessions, with a provider label, model, u
 and the same compact menu bar states. Tested against Codex CLI 0.154.0.
 
 For automatic clearing of amber as soon as an answer or approval is accepted,
-start new sessions with the optional `codex-beacon` launcher:
+start new sessions with the optional `codex-chirp` launcher:
 
 ```sh
 # Install the launcher from the repository or extracted release:
-install -m 755 codex-beacon ~/.local/bin/codex-beacon
-# Start ccbeacon once, then:
-codex-beacon
+install -m 755 codex-chirp ~/.local/bin/codex-chirp
+# Start AgentChirp once, then:
+codex-chirp
 # Or resume an existing conversation through the shared server:
-codex-beacon resume --last
+codex-chirp resume --last
 ```
 
 Ensure `~/.local/bin` is on your PATH. The launcher starts Codex's local shared
-App Server automatically and connects the terminal to it. ccbeacon reads live
+App Server automatically and connects the terminal to it. AgentChirp reads live
 thread status about once per second, clears amber when work resumes, and checks
 that a request remains unanswered before playing its delayed sound. It never
 answers approvals or questions. Ordinary `codex` and already-running standalone
 sessions continue using hooks. This optional integration uses the experimental
 App Server interface in Codex CLI 0.154.0.
 
-When a Codex home exists, ccbeacon installs its adapter at
-`~/.codex/hooks/ccbeacon.sh` and adds missing entries to `~/.codex/hooks.json`.
+When a Codex home exists, AgentChirp installs its adapter at
+`~/.codex/hooks/agentchirp.sh` and adds missing entries to `~/.codex/hooks.json`.
 It preserves existing hooks and does not change `config.toml`, approval policy,
-or hook trust. A custom `CODEX_HOME` is supported when ccbeacon is launched with
+or hook trust. A custom `CODEX_HOME` is supported when AgentChirp is launched with
 that environment variable.
 
 **To activate:** restart Codex if needed, open `/hooks`, and review/trust the
-ccbeacon entries. Then start or resume a session. Codex skips untrusted hooks;
-installing ccbeacon alone does not approve them.
+agentchirp entries. Then start or resume a session. Codex skips untrusted hooks;
+installing AgentChirp alone does not approve them.
 
 The adapter observes session start/end, prompts, tool calls, permission requests,
 completion, and interruption. Supported input-question tool calls also appear as
@@ -178,7 +180,7 @@ supported events and required trust review.
 
 ## How it works
 
-The shared hook script (`ccbeacon.sh`) uses separate Claude and Codex adapters.
+The shared hook script (`agentchirp.sh`) uses separate Claude and Codex adapters.
 Claude Code calls it on these events:
 
 | Hook | Matcher | State written |
@@ -191,7 +193,7 @@ Claude Code calls it on these events:
 | `StopFailure` | — | `done` |
 | `SessionEnd` | — | session file removed |
 
-Each call atomically writes a small JSON file to `~/.claude/cc-sessions/` including the session's PID, TTY device, and terminal app. ccbeacon watches that directory with `DispatchSource` so state changes appear instantly, plus a 1-second refresh for elapsed times and staleness checks.
+Each call atomically writes a small JSON file to `~/.claude/agentchirp/sessions/` including the session's PID, TTY device, and terminal app. AgentChirp watches that directory with `DispatchSource` so state changes appear instantly, plus a 1-second refresh for elapsed times and staleness checks.
 
 Sessions are kept alive as long as their Claude process is running (verified via `kill(pid, 0)` plus a process start-time check that guards against PID reuse). When the session ends — whether from a normal close or the process exiting — it disappears from the menu immediately.
 
@@ -203,6 +205,6 @@ A `flock`-based exclusive lock in the hook script prevents a race condition wher
 
 ## Security
 
-Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/cc-sessions/`. The Codex adapter writes state under `$CODEX_HOME/ccbeacon/sessions` (default `~/.codex`).
+Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/agentchirp/sessions/`. The Codex adapter writes state under `$CODEX_HOME/agentchirp/sessions` (default `~/.codex`).
 Both adapters retain session metadata, not prompt or tool content. The app reads
 per-session token counts from your local transcript files. No data leaves your machine.

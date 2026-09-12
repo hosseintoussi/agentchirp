@@ -28,7 +28,7 @@ jobs:
           TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
           if [ -n "$TAG" ]; then
             test "$(git rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")"
-            VERSION=$(sed -n 's/public let appVersion = "\(.*\)"/\1/p' Sources/CCBeaconCore/Version.swift)
+            VERSION=$(sed -n 's/public let appVersion = "\(.*\)"/\1/p' Sources/AgentChirpCore/Version.swift)
             test "$TAG" = "v$VERSION"
           fi
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
@@ -51,11 +51,11 @@ jobs:
           TAG="${{ steps.tag.outputs.name }}"
           # --product: the multi-arch (xcbuild) path compiles every target as a library,
           # which breaks the top-level-code test runner; only the app binary is needed.
-          swift build -c release --arch arm64 --arch x86_64 --product ccbeacon
+          swift build -c release --arch arm64 --arch x86_64 --product agentchirp
           mkdir dist
-          cp .build/apple/Products/Release/ccbeacon ccbeacon.sh codex-beacon dist/
-          tar -czf "ccbeacon-${TAG}-macos.tar.gz" -C dist ccbeacon ccbeacon.sh codex-beacon
-          echo "sha=$(shasum -a 256 ccbeacon-${TAG}-macos.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          cp .build/apple/Products/Release/agentchirp agentchirp.sh codex-chirp dist/
+          tar -czf "agentchirp-${TAG}-macos.tar.gz" -C dist agentchirp agentchirp.sh codex-chirp
+          echo "sha=$(shasum -a 256 agentchirp-${TAG}-macos.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
         if: steps.tag.outputs.name != ''
@@ -63,7 +63,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.name }}
           body: ${{ steps.changelog.outputs.notes }}
-          files: ccbeacon-*.tar.gz
+          files: agentchirp-*.tar.gz
 
       - name: Bump Homebrew formula
         if: steps.tag.outputs.name != ''
@@ -71,17 +71,17 @@ jobs:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.name }}"
-          TARBALL="https://github.com/${{ github.repository }}/releases/download/${TAG}/ccbeacon-${TAG}-macos.tar.gz"
+          TARBALL="https://github.com/${{ github.repository }}/releases/download/${TAG}/agentchirp-${TAG}-macos.tar.gz"
           SHA256="${{ steps.dist.outputs.sha }}"
 
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/hosseintoussi/homebrew-ccbeacon.git" /tmp/tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/hosseintoussi/homebrew-agentchirp.git" /tmp/tap
           cd /tmp/tap
 
-          sed -i '' "s|url \".*\"|url \"${TARBALL}\"|"     Formula/ccbeacon.rb
-          sed -i '' "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/ccbeacon.rb
+          sed -i '' "s|url \".*\"|url \"${TARBALL}\"|"     Formula/agentchirp.rb
+          sed -i '' "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/agentchirp.rb
 
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name  "github-actions[bot]"
-          git add Formula/ccbeacon.rb
-          git diff --cached --quiet || git commit -m "ccbeacon ${TAG}"
+          git add Formula/agentchirp.rb
+          git diff --cached --quiet || git commit -m "agentchirp ${TAG}"
           git push

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>AgentChirp</title>
+  <g transform="translate(0 24) scale(1 -1)">
+    <path d="M17.701 15.992 A6.96 6.96 0 0 1 6.299 15.992 M21.043 18.332 A11.04 11.04 0 0 1 2.957 18.332" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M8.2 3.6 C12.8 3.3 15.5 4.3 14.9 7.3 C14.8 8.5 14.5 9.7 14.3 10.6 L16.7 13 L13.5 12.2 C11.2 13.2 9.4 12 9.2 9.6 C9.1 8.2 7.6 7.6 7.6 6.3 L7.6 4.4 C7.6 3.9 7.8 3.6 8.2 3.6 Z" fill="currentColor"/>
+  </g>
+</svg>

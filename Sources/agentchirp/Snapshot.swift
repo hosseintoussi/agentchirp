@@ -1,21 +1,22 @@
 import Cocoa
-import CCBeaconCore
+import AgentChirpCore
 
-// Dev-only: `ccbeacon --snapshot [dir]` renders the console with fixture sessions to
+// Dev-only: `agentchirp --snapshot [dir]` renders the console with fixture sessions to
 // <scenario>-dark.png / <scenario>-light.png so layout and color changes can be
 // reviewed without clicking through the real menu bar.
 
 func renderMenuSnapshots(to dir: String) {
+    renderBrandPreview(to: dir)
     let now = Date().timeIntervalSince1970
     let sessions = [
         Session(id: "s1", state: "waiting", ts: now - 154, cwd: "/Users/dev/code/api-gateway",
                 transcriptPath: "", totalTokens: 184_000, inputTokens: 12_400, outputTokens: 8_200,
                 cacheTokens: 163_400, model: "claude-opus-4-8", tty: "/dev/ttys004", terminal: "iTerm2",
                 detail: "Claude needs your permission to use Bash"),
-        Session(id: "s2", state: "working", ts: now - 2_115, cwd: "/Users/dev/code/ccbeacon",
+        Session(id: "s2", state: "working", ts: now - 2_115, cwd: "/Users/dev/code/agentchirp",
                 transcriptPath: "", totalTokens: 1_432_000, inputTokens: 84_200, outputTokens: 41_700,
                 cacheTokens: 1_306_100, model: "gpt-6-astra", tty: "/dev/ttys007", terminal: "iTerm2", provider: .codex),
-        Session(id: "s3", state: "idle", ts: now - 7_300, cwd: "/Users/dev/code/homebrew-ccbeacon",
+        Session(id: "s3", state: "idle", ts: now - 7_300, cwd: "/Users/dev/code/homebrew-agentchirp",
                 transcriptPath: "", totalTokens: 52_300, inputTokens: 4_100, outputTokens: 2_900,
                 cacheTokens: 45_300, model: "claude-sonnet-4-6", tty: "", terminal: ""),
     ]
@@ -162,8 +163,8 @@ func checkDashboardInteractions() {
     precondition(muted, "Speaker button must toggle sounds")
     dashboard.refresh(initial, muted: muted)
     precondition(buttons().contains { $0.accessibilityLabel() == "Sounds off" && $0.title == "Muted" }, "Mute state must render on the speaker and caption")
-    let quitButton = buttons().first { $0.accessibilityLabel() == "Quit ccbeacon" }!
-    precondition(quitButton.toolTip == "Quit ccbeacon \(appVersion)", "Version rides on the quit tooltip")
+    let quitButton = buttons().first { $0.accessibilityLabel() == "Quit \(appName)" }!
+    precondition(quitButton.toolTip == "Quit \(appName) \(appVersion)", "Version rides on the quit tooltip")
     precondition(abs(quitButton.frame.minX - soundButton.frame.maxX) <= 8 && quitButton.frame.minY == soundButton.frame.minY,
                  "Speaker and quit sit together at the top right")
     precondition(soundButton is HeaderIconButton && quitButton is HeaderIconButton, "Header icons carry hover and focus states")
@@ -176,7 +177,7 @@ func checkDashboardInteractions() {
     precondition(!(quitButton as! HeaderIconButton).isActive, "Leaving restores the quiet state")
     quitButton.performClick(nil)
     precondition(quit, "Quit must invoke termination callback")
-    precondition(!texts().contains("v\(appVersion)") && !texts().contains("ccbeacon"), "Header shows state, not branding")
+    precondition(!texts().contains("v\(appVersion)") && !texts().contains(appName), "Header shows state, not branding")
     precondition(!buttons().contains { $0.accessibilityLabel() == "Settings" }, "No settings menu button")
 
     // Keep-awake sits beside the speaker and reflects the preference.
@@ -269,7 +270,7 @@ func checkDashboardInteractions() {
     precondition(delegate.attentionTimer == nil && button.image!.isTemplate, "Resuming stops the signal")
     delegate.updateButton([session("attention", "idle", age: 2, lastEvent: "Stop"), session("other", "working")])
     precondition(!button.image!.isTemplate, "A fresh completion shows even while others work")
-    precondition(button.toolTip == "ccbeacon · 1 working · 1 idle", "Tooltip states counts once")
+    precondition(button.toolTip == "\(appName) · 1 working · 1 idle", "Tooltip states counts once")
 
     // Overlapping completion and waiting must switch actual artwork colors.
     let recent = session("recent", "idle", age: 2, lastEvent: "Stop")
@@ -443,4 +444,32 @@ func checkDashboardInteractions() {
     NSStatusBar.system.removeStatusItem(delegate.statusItem)
     print("✓ Menu bar checks passed: breathing working beacon, steady idle beacon, finite attention flash, completion cue, tooltip")
     print("✓ Native UI checks passed: state headline, asks on rows, verb clocks, ordering, terminal action, copy feedback, header controls, keep awake, live updates, completion, duplicate names, empty state, overflow, scroll preservation, keyboard")
+}
+
+// Render the actual native mark at presentation and menu-bar sizes in both appearances.
+private func renderBrandPreview(to directory: String) {
+    let size = NSSize(width: 720, height: 360)
+    let image = NSImage(size: size, flipped: false) { _ in
+        for (index, background, foreground) in [(0, NSColor.white, NSColor.black),
+                                                (1, NSColor(calibratedWhite: 0.12, alpha: 1), NSColor.white)] {
+            let x = CGFloat(index) * 360
+            background.setFill()
+            NSRect(x: x, y: 0, width: 360, height: 360).fill()
+            BeaconMark.draw(in: NSRect(x: x + 120, y: 170, width: 120, height: 120), color: foreground)
+            let name = NSAttributedString(string: appName, attributes: [
+                .font: NSFont.systemFont(ofSize: 26, weight: .medium), .foregroundColor: foreground])
+            name.draw(at: NSPoint(x: x + (360 - name.size().width) / 2, y: 117))
+            for (offset, color) in [foreground, NSColor.systemOrange, NSColor.systemGreen].enumerated() {
+                BeaconMark.image(size: 18, color: color).draw(in: NSRect(x: x + 126 + CGFloat(offset) * 45,
+                                                                       y: 65, width: 18, height: 18))
+            }
+        }
+        return true
+    }
+    var rect = NSRect(origin: .zero, size: size)
+    guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil),
+          let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) else { return }
+    let path = directory + "/agentchirp-mark.png"
+    do { try png.write(to: URL(fileURLWithPath: path)); print(path) }
+    catch { preconditionFailure("Unable to write brand preview: \(error)") }
 }

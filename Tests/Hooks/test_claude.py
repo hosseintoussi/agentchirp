@@ -7,14 +7,14 @@ import tempfile
 import time
 import unittest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "ccbeacon.sh"
+SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "agentchirp.sh"
 
 
 class ClaudeHookTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = pathlib.Path(self.temp.name)
-        self.path = self.home / ".claude" / "cc-sessions" / "session.json"
+        self.path = self.home / ".claude" / "agentchirp" / "sessions" / "session.json"
 
     def tearDown(self):
         self.temp.cleanup()

@@ -3,9 +3,9 @@ import Darwin
 
 // MARK: - Paths
 
-public let sessionsDir  = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/cc-sessions")
+public let sessionsDir  = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/agentchirp/sessions")
 public let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
-public let codexSessionsDir = codexHome + "/ccbeacon/sessions"
+public let codexSessionsDir = codexHome + "/agentchirp/sessions"
 
 public enum AgentProvider: String {
     case claude, codex

@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "ccbeacon",
+    name: "agentchirp",
     platforms: [.macOS(.v13)],
     targets: [
         .target(
-            name: "CCBeaconCore",
-            path: "Sources/CCBeaconCore"
+            name: "AgentChirpCore",
+            path: "Sources/AgentChirpCore"
         ),
         .executableTarget(
-            name: "ccbeacon",
-            dependencies: ["CCBeaconCore"],
-            path: "Sources/ccbeacon"
+            name: "agentchirp",
+            dependencies: ["AgentChirpCore"],
+            path: "Sources/agentchirp"
         ),
         .executableTarget(
-            name: "CCBeaconTests",
-            dependencies: ["CCBeaconCore"],
-            path: "Tests/CCBeaconCoreTests"
+            name: "AgentChirpTests",
+            dependencies: ["AgentChirpCore"],
+            path: "Tests/AgentChirpCoreTests"
         ),
     ]
 )

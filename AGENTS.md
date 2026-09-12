@@ -1,10 +1,13 @@
-# ccbeacon — developer guide
+# AgentChirp — developer guide
+
+The product is AgentChirp. Its native bird silhouette and two rounded beam arcs
+share one vector implementation for the menu bar and dashboard.
 
 ## Project layout
 
 ```
 Sources/
-  CCBeaconCore/     Pure logic — models, formatters, session loading. No AppKit.
+  AgentChirpCore/     Pure logic — models, formatters, session loading. No AppKit.
     Core.swift      Session model, formatters, process liveness
     SessionPolicy.swift Typed state/event/outcome, notifications, beacon and row descriptors
     SessionRepository.swift Session loading, synchronized cleanup, background SessionStore
@@ -13,23 +16,23 @@ Sources/
     IntegrationInstaller.swift Shared hook installation with observable errors
     CodexTokens.swift Incremental Codex cumulative token adapter
     Version.swift   appVersion constant + isDevBuild detection (path-based)
-  ccbeacon/         AppKit menu bar app
+  agentchirp/         AppKit menu bar app
     AppDelegate.swift  NSStatusItem, popover, notifications, file watching
     Dashboard.swift    Native session console, grouped rows, buttons, BeaconMark, adaptive surfaces
     Snapshot.swift     --snapshot flag: renders fixture consoles to PNGs for design review
     main.swift         Entry point
 Tests/
-  CCBeaconCoreTests/  Framework-free test runner (no XCTest needed)
-ccbeacon.sh           Claude/Codex hook adapters — writes provider-specific state files
+  AgentChirpCoreTests/  Framework-free test runner (no XCTest needed)
+agentchirp.sh           Claude/Codex hook adapters — writes provider-specific state files
 ```
 
-AppKit code lives only in `Sources/ccbeacon/`. Everything testable goes in `CCBeaconCore`.
+AppKit code lives only in `Sources/agentchirp/`. Everything testable goes in `AgentChirpCore`.
 
 ## Build and run
 
 ```sh
 swift build -c release
-.build/release/ccbeacon &
+.build/release/agentchirp &
 ```
 
 The menu bar button keeps the same beacon at a fixed square width with no text.
@@ -43,7 +46,7 @@ completion shows `systemGreen` for 10 seconds. Reduce Motion skips the flash.
 `updateButton` only regenerates the artwork when its descriptor changes.
 
 The console has no tabs. `ConsoleSummary` builds the header headline and subline
-from counts; `consoleOrder` (CCBeaconCore) sorts waiting (oldest first), then
+from counts; `consoleOrder` (AgentChirpCore) sorts waiting (oldest first), then
 working (oldest first), then idle (newest first). Waiting rows show
 `waitingSummary(session.detail)`: only "Needs permission", "Waiting for your answer",
 or "Waiting for you". Hooks persist generic permission/input kinds, never raw commands
@@ -81,8 +84,8 @@ navigation. State changes rebuild grouped rows, while clock/token ticks update l
 To review the full console in light and dark appearances without installing hooks:
 
 ```sh
-.build/release/ccbeacon --snapshot /tmp
-.build/release/ccbeacon --ui-check
+.build/release/agentchirp --snapshot /tmp
+.build/release/agentchirp --ui-check
 ```
 
 These commands render mixed, asks, finished, empty, working, idle, and overflow
@@ -93,13 +96,13 @@ run the normal application launch or modify Claude settings.
 ## Test
 
 ```sh
-swift run CCBeaconTests
+swift run AgentChirpTests
 python3 Tests/Hooks/test_codex.py
 python3 Tests/Hooks/test_claude.py
 python3 Tests/Release/test_release.py
 python3 Tests/CodexRuntime/test_runtime.py # requires release build
 python3 Tests/CodexRuntime/test_launcher.py
-bash -n ccbeacon.sh
+bash -n agentchirp.sh
 ```
 
 No testing framework required — runs with Command Line Tools alone (no Xcode needed).
@@ -109,11 +112,11 @@ truncation), and `loadSessions` (state resolution, staleness, PID recycling, sor
 
 ## Hook script setup (required to see sessions)
 
-Automatic: `syncClaudeIntegration()` (`Sources/ccbeacon/Setup.swift`) runs at every
-launch. It copies the bundled `ccbeacon.sh` to `~/.claude/hooks/` when contents differ
+Automatic: `syncClaudeIntegration()` (`Sources/agentchirp/Setup.swift`) runs at every
+launch. It copies the bundled `agentchirp.sh` to `~/.claude/hooks/` when contents differ
 (dev builds resolve it from the repo root, Homebrew builds from the keg's `libexec`)
 and merges any missing hook entries into `~/.claude/settings.json` via
-`mergedHookSettings()` in CCBeaconCore. Events that already contain a ccbeacon entry
+`mergedHookSettings()` in AgentChirpCore. Events that already contain a agentchirp entry
 are never modified.
 
 Claude events: SessionStart → idle, UserPromptSubmit → working, PreToolUse → `resume`,
@@ -149,7 +152,7 @@ transcripts are not a stable API. Session state must not depend on that parser.
 Python hook tests use temporary directories only. UI snapshots include mixed providers.
 Do not claim live Codex hook delivery until the user has trusted the installed hooks.
 
-`codex-beacon` delegates to the installed adapter's `launch-codex` mode, starts
+`codex-chirp` delegates to the installed adapter's `launch-codex` mode, starts
 Codex's local App Server daemon and uses `--remote unix://...`. Ordinary `codex`
 is unchanged. `CodexRuntimeClient` polls loaded root threads with read-only
 `thread/read` calls on the SessionStore queue. It never subscribes to threads or
@@ -161,7 +164,7 @@ status permits delayed permission sounds; validation rechecks it before playback
 ## Releasing a new version
 
 1. Add a `## [X.Y.Z] - YYYY-MM-DD` section at the top of `CHANGELOG.md`
-2. Bump `appVersion` in `Sources/CCBeaconCore/Version.swift`
+2. Bump `appVersion` in `Sources/AgentChirpCore/Version.swift`
 3. Commit and tag:
    ```sh
    git commit -am "Bump to vX.Y.Z"
@@ -174,7 +177,7 @@ passes on the pushed commit. It will:
 - Check out the exact successful upstream main-push CI SHA, detect its version tag,
   and verify that the tag and appVersion match the checkout
 - Extract the matching `## [X.Y.Z]` section from `CHANGELOG.md` as the release body
-- Build a universal (arm64 + x86_64) binary and attach `ccbeacon-vX.Y.Z-macos.tar.gz`
+- Build a universal (arm64 + x86_64) binary and attach `agentchirp-vX.Y.Z-macos.tar.gz`
   (binary + hook script) to the GitHub release
 - Point the Homebrew tap formula at the binary asset and update its SHA256
 
@@ -183,20 +186,20 @@ passes on the pushed commit. It will:
 
 ## Homebrew tap
 
-The tap lives at `github.com/hosseintoussi/homebrew-ccbeacon`.
-Formula: `Formula/ccbeacon.rb` — install command: `brew tap hosseintoussi/ccbeacon && brew install ccbeacon`.
+The tap lives at `github.com/hosseintoussi/homebrew-agentchirp`.
+Formula: `Formula/agentchirp.rb` — install command: `brew tap hosseintoussi/agentchirp && brew install agentchirp`.
 
 To manually update the formula after a release (if the workflow didn't run):
 ```sh
-cd /path/to/homebrew-ccbeacon
-# update url and sha256 in Formula/ccbeacon.rb
-git commit -am "ccbeacon vX.Y.Z"
+cd /path/to/homebrew-agentchirp
+# update url and sha256 in Formula/agentchirp.rb
+git commit -am "agentchirp vX.Y.Z"
 git push
 ```
 
 ## Key implementation details
 
-- **False notification prevention:** `fcntl.flock(LOCK_EX)` in `ccbeacon.sh` serializes
+- **False notification prevention:** `fcntl.flock(LOCK_EX)` in `agentchirp.sh` serializes
   concurrent hook processes using 64 persistent SHA-256 bucket locks under `.locks`.
   Never unlink these locks. Both adapters share locking, atomic writes, and ancestry
   discovery; provider event handling remains separate. Cleanup acquires the same lock

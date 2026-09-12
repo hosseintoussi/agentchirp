@@ -13,7 +13,7 @@ import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-BINARY = ROOT / ".build/release/ccbeacon"
+BINARY = ROOT / ".build/release/agentchirp"
 
 
 def exact(connection, length):

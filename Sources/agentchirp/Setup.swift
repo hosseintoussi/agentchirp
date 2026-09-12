@@ -1,12 +1,12 @@
 import Foundation
-import CCBeaconCore
+import AgentChirpCore
 
 private func bundledHookData() -> Data? {
     let executable = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
         .resolvingSymlinksInPath()
     let directory = executable.deletingLastPathComponent()
     // SwiftPM resolves .build/release to .build/<architecture>/release.
-    let candidates = ["../libexec/ccbeacon.sh", "../../ccbeacon.sh", "../../../ccbeacon.sh", "ccbeacon.sh"]
+    let candidates = ["../libexec/agentchirp.sh", "../../agentchirp.sh", "../../../agentchirp.sh", "agentchirp.sh"]
     for relative in candidates {
         if let data = try? Data(contentsOf: directory.appendingPathComponent(relative).standardized) { return data }
     }
@@ -30,9 +30,9 @@ func syncCodexIntegration() {
 private func syncIntegration(provider: AgentProvider, home: String, config: String,
                              merge: ([String: Any]) -> [String: Any]?) {
     guard let script = bundledHookData() else {
-        NSLog("ccbeacon: bundled hook script was not found")
+        NSLog("AgentChirp: bundled hook script was not found")
         return
     }
     do { try installIntegration(home: home, configName: config, script: script, merge: merge) }
-    catch { NSLog("ccbeacon: could not install %@ hooks: %@", provider.title, String(describing: error)) }
+    catch { NSLog("AgentChirp: could not install %@ hooks: %@", provider.title, String(describing: error)) }
 }

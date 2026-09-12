@@ -1,5 +1,5 @@
 import Cocoa
-import CCBeaconCore
+import AgentChirpCore
 
 // MARK: - Palette
 //
@@ -111,9 +111,23 @@ final class BeaconMark: NSView {
             arc.stroke()
         }
         color.setFill()
-        NSBezierPath(roundedRect: NSRect(x: center.x - rect.width * 0.07,
-            y: rect.minY + rect.height * 0.15, width: rect.width * 0.14,
-            height: rect.height * 0.4), xRadius: 2, yRadius: 2).fill()
+        // One bird silhouette replaces the stem; the original two beams become chirps.
+        // No eye or feathers: the shape must survive an 18-point menu bar image.
+        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+            NSPoint(x: rect.minX + rect.width * x / 24, y: rect.minY + rect.height * y / 24)
+        }
+        let bird = NSBezierPath()
+        bird.move(to: point(8.2, 3.6))
+        bird.curve(to: point(14.9, 7.3), controlPoint1: point(12.8, 3.3), controlPoint2: point(15.5, 4.3))
+        bird.curve(to: point(14.3, 10.6), controlPoint1: point(14.8, 8.5), controlPoint2: point(14.5, 9.7))
+        bird.line(to: point(16.7, 13.0))
+        bird.line(to: point(13.5, 12.2))
+        bird.curve(to: point(9.2, 9.6), controlPoint1: point(11.2, 13.2), controlPoint2: point(9.4, 12.0))
+        bird.curve(to: point(7.6, 6.3), controlPoint1: point(9.1, 8.2), controlPoint2: point(7.6, 7.6))
+        bird.line(to: point(7.6, 4.4))
+        bird.curve(to: point(8.2, 3.6), controlPoint1: point(7.6, 3.9), controlPoint2: point(7.8, 3.6))
+        bird.close()
+        bird.fill()
     }
     static func image(size: CGFloat, color: NSColor? = nil) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
@@ -456,7 +470,7 @@ final class DashboardController: NSViewController {
                 tip: muted ? "Sounds off · click to turn on" : "Sounds on · click to turn off",
                 a11y: muted ? "Sounds off" : "Sounds on") { [weak self] in self?.onMute?() }
         control("power", "Quit", x: 348, key: "quit",
-                tip: "Quit ccbeacon \(appVersion)", a11y: "Quit ccbeacon") { [weak self] in self?.onQuit?() }
+                tip: "Quit \(appName) \(appVersion)", a11y: "Quit \(appName)") { [weak self] in self?.onQuit?() }
 
         var y: CGFloat = 4
         for session in sessions {

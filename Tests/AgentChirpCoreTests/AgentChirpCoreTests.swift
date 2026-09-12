@@ -1,8 +1,8 @@
 import Foundation
-import CCBeaconCore
+import AgentChirpCore
 
 // Minimal test runner — no framework needed, works with CommandLineTools.
-// Run with: swift run CCBeaconTests
+// Run with: swift run AgentChirpTests
 
 private var passed = 0, failed = 0
 
@@ -27,7 +27,7 @@ private func suite(_ name: String, _ body: () -> Void) {
 
 // MARK: - Fixtures
 
-private let tmpRoot = NSTemporaryDirectory() + "ccbeacon-tests-\(getpid())"
+private let tmpRoot = NSTemporaryDirectory() + "agentchirp-tests-\(getpid())"
 
 private func makeTmpDir(_ name: String) -> String {
     let dir = tmpRoot + "/" + name
@@ -222,7 +222,7 @@ suite("mergedHookSettings") {
     expect(freshHooks.keys.sorted().joined(separator: ","),
            "Notification,PreToolUse,SessionEnd,SessionStart,Stop,StopFailure,UserPromptSubmit",
            "all seven events configured")
-    expect(String(describing: freshHooks["PreToolUse"] ?? "").contains("ccbeacon.sh resume"), true,
+    expect(String(describing: freshHooks["PreToolUse"] ?? "").contains("agentchirp.sh resume"), true,
            "PreToolUse resumes a waiting session")
     expect((freshHooks["Notification"] as? [[String: Any]])?.count ?? 0, 2,
            "Notification gets both matchers")
@@ -230,23 +230,23 @@ suite("mergedHookSettings") {
     // Fully configured → nil (no rewrite).
     expect(mergedHookSettings(fresh!) == nil, true, "complete settings → no change")
 
-    // An event with an existing ccbeacon entry is left untouched; missing events are added.
+    // An event with an existing agentchirp entry is left untouched; missing events are added.
     let custom: [String: Any] = [
         "model": "opus",
         "hooks": [
-            "Stop": [["hooks": [["type": "command", "command": "/custom/path/ccbeacon.sh done"]]]],
+            "Stop": [["hooks": [["type": "command", "command": "/custom/path/agentchirp.sh done"]]]],
             "PreToolUse": [["hooks": [["type": "command", "command": "other-tool"]]]],
         ],
     ]
     let merged = mergedHookSettings(custom)
     let mergedHooks = merged?["hooks"] as? [String: Any] ?? [:]
     expect((mergedHooks["Stop"] as? [[String: Any]])?.count ?? 0, 1,
-           "existing ccbeacon entry not duplicated")
+           "existing agentchirp entry not duplicated")
     expect(String(describing: mergedHooks["Stop"] ?? "").contains("/custom/path"), true,
            "user's custom command preserved")
     expect(mergedHooks["SessionStart"] != nil, true, "missing event added")
     expect(String(describing: mergedHooks["PreToolUse"] ?? "").contains("other-tool"), true, "unrelated hooks preserved")
-    expect((mergedHooks["PreToolUse"] as? [[String: Any]])?.count ?? 0, 2, "ccbeacon entry added beside the user's")
+    expect((mergedHooks["PreToolUse"] as? [[String: Any]])?.count ?? 0, 2, "agentchirp entry added beside the user's")
     expect(merged?["model"] as? String ?? "", "opus", "non-hook settings preserved")
 }
 
@@ -314,11 +314,11 @@ suite("Codex integration") {
            "Interrupt,PermissionRequest,PostToolUse,PreToolUse,SessionEnd,SessionStart,Stop,UserPromptSubmit",
            "Codex lifecycle event set")
     expect(mergedCodexHookSettings(fresh, home: "/tmp/codex") == nil, true, "idempotent hook merge")
-    let existing: [String: Any] = ["description": "keep", "hooks": ["Stop": [["hooks": [["type": "command", "command": "custom ccbeacon.sh"]]]]]]
+    let existing: [String: Any] = ["description": "keep", "hooks": ["Stop": [["hooks": [["type": "command", "command": "custom agentchirp.sh"]]]]]]
     let merged = mergedCodexHookSettings(existing, home: "/tmp/codex")!
     expect(merged["description"] as? String ?? "", "keep", "preserves top-level metadata")
     let stop = (merged["hooks"] as! [String: Any])["Stop"] as! [[String: Any]]
-    expect(stop.count, 1, "preserves custom ccbeacon entry")
+    expect(stop.count, 1, "preserves custom agentchirp entry")
     expect(mergedCodexHookSettings(["hooks": "invalid"], home: "/tmp") == nil, true, "does not overwrite malformed hooks")
     let unrelated: [String: Any] = ["hooks": ["Stop": [["hooks": [["command": "other-tool"]]]]]]
     let kept = mergedCodexHookSettings(unrelated, home: "/tmp")!["hooks"] as! [String: Any]
@@ -465,7 +465,7 @@ suite("Integration installation") {
     let installed = FileManager.default.contents(atPath: config)!
     let settings = try! JSONSerialization.jsonObject(with: installed) as! [String: Any]
     expect(settings["theme"] as? String ?? "", "dark", "installation preserves unrelated settings")
-    let hook = home + "/hooks/ccbeacon.sh"
+    let hook = home + "/hooks/agentchirp.sh"
     try! FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: hook)
     try! installIntegration(home: home, configName: "settings.json", script: script, merge: mergedHookSettings)
     expect((try! FileManager.default.attributesOfItem(atPath: hook)[.posixPermissions] as! NSNumber).intValue, 0o755,

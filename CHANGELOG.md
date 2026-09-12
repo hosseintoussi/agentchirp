@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### AgentChirp
+- Renamed the app and executable to AgentChirp / `agentchirp`, with a native bird-and-beam mark
+- Added `codex-chirp`; renamed the hooks, modules, session directories, and release artifacts consistently
+
 ### Added
 - Keep awake: while any session is working the app holds system and display sleep assertions to keep the screen on. An Awake button in the header turns it off; the preference persists
 
@@ -15,7 +19,7 @@
 - The needs-input sound is Ping instead of Sosumi
 - Same-name projects show `parent/name`; VoiceOver labels include state, time, and the ask; keyboard focus draws the system focus ring
 - Header shrank from 92 to 56 points and the footer was removed; the popover fits its content
-- Granting a permission now flips the session back to working immediately: a `PreToolUse` hook (`ccbeacon.sh resume`) is installed for Claude Code and only writes when the session was waiting. Previously the app waited for the transcript to change, which could take as long as the approved tool ran
+- Granting a permission now flips the session back to working immediately: a `PreToolUse` hook (`agentchirp.sh resume`) is installed for Claude Code and only writes when the session was waiting. Previously the app waited for the transcript to change, which could take as long as the approved tool ran
 - `fmtElapsed` spaces units ("2h 1m") and adds days
 
 
@@ -23,7 +27,7 @@
 - Codex waiting sessions retain keep-awake through long approved commands; idle and ended sessions release it
 - Answered questions cancel pending sounds even during asynchronous validation; tool-call IDs correlate Codex answers
 - Standalone Codex permission prompts use visual signals only because hooks do not report approval resolution separately
-- Optional `codex-beacon` launcher and read-only shared-server monitoring clear amber when Codex resumes, with live validation of delayed alerts
+- Optional `codex-chirp` launcher and read-only shared-server monitoring clear amber when Codex resumes, with live validation of delayed alerts
 - Release builds check out the exact successful CI commit and verify its tag against appVersion
 - Stale cleanup shares persistent locks with hook writers and preserves concurrently refreshed state
 - Claude startup and failed turns no longer show successful completion; hooks retain lifecycle outcomes
@@ -34,7 +38,7 @@
 ### Refactored
 - Session loading and transcript parsing run on a serial background store; UI actions reuse published snapshots
 - Shared transcript transport, hook installation, locking, atomic writes, and process discovery replace duplicated infrastructure
-- Typed lifecycle, notification, and presentation policies live in CCBeaconCore with regression coverage
+- Typed lifecycle, notification, and presentation policies live in AgentChirpCore with regression coverage
 
 ## [2.1.3] - 2026-07-02
 
@@ -57,7 +61,7 @@
 ### Changed
 - Dropdown elapsed times update live while the menu is open
 - Hook script latency roughly halved: session PID/tty/terminal are reused from the previous state file while the PID is alive, and the process-tree walk (first event only) takes one `ps` snapshot instead of up to 12 sequential calls
-- Login launch moved to `brew services start ccbeacon` (formula `service` block) instead of a hand-written LaunchAgent
+- Login launch moved to `brew services start agentchirp` (formula `service` block) instead of a hand-written LaunchAgent
 
 ### Fixed
 - Terminal.app detection in the hook — `ps` reports a full executable path, so the old exact-name match never detected it
@@ -74,7 +78,7 @@
 - Cursor handling uses `cursorUpdate` instead of unbalanced push/pop
 
 ### Added
-- `ccbeacon --snapshot [dir]` renders the dropdown with fixture sessions to `menu-dark.png` / `menu-light.png` for design review
+- `agentchirp --snapshot [dir]` renders the dropdown with fixture sessions to `menu-dark.png` / `menu-light.png` for design review
 
 ### Fixed
 - Hook script now writes session files atomically (temp file + rename) — the app can no longer read a half-written file, which caused sessions to flicker out of the menu and re-trigger "needs input" sounds
@@ -86,7 +90,7 @@
 - `SessionEnd` also resets the iTerm2 tab color (tabs no longer stay green forever)
 - Clicking a session row no longer guesses iTerm2 when the session's terminal is unknown; rows are only clickable for supported terminals (iTerm2, Terminal.app), and the tty is validated before being passed to AppleScript
 - Stale PID detection now also checks the process start time via `sysctl`, so a recycled PID can't keep a dead session alive
-- `.lock` files in `~/.claude/cc-sessions/` are cleaned up instead of accumulating forever
+- `.lock` files in `~/.claude/agentchirp/sessions/` are cleaned up instead of accumulating forever
 - Hook script values are passed to Python via the environment instead of shell interpolation (robust against quotes in paths)
 
 ### Changed
@@ -212,4 +216,4 @@ Initial release.
 - Daily token usage summary
 - `flock`-based hook script prevents false "needs input" notifications
 - 8-second debounce with transcript recency check as belt-and-suspenders
-- Homebrew tap: `brew tap hosseintoussi/ccbeacon && brew install ccbeacon`
+- Homebrew tap: `brew tap hosseintoussi/agentchirp && brew install agentchirp`
