@@ -3,13 +3,13 @@
 ## [Unreleased]
 
 ### Added
-- Keep awake: while any session is working the app holds a system sleep assertion (display may still sleep). An Awake button in the header turns it off; the preference persists
+- Keep awake: while any session is working the app holds system and display sleep assertions to keep the screen on. An Awake button in the header turns it off; the preference persists
 
 ### Changed — signal-first console
 - The menu bar beacon is calm: a new request flashes three times and then holds steady orange; working breathes slowly (opacity only) and idle is steady. The continuous 30 fps attention pulse is gone. A completion shows green even while other sessions work
 - The console header now answers the question ("2 need input", "3 working", "All quiet", "Nothing running") beside a beacon lit by the top state; the top right holds captioned Awake, Sounds, and Quit buttons (version on the quit tooltip) instead of a menu
 - Tabs are gone. One list orders sessions by what needs you: waiting (longest first), working (longest running first), idle (newest first). Rows carry a state dot and a verb clock ("waiting 2m", "idle 2h 1m")
-- Waiting rows say what the agent is asking for ("Needs permission for Bash", "Waiting for your answer"); the hook records the Notification message (Claude) or the tool and command (Codex)
+- Waiting rows show only "Needs permission" or "Waiting for your answer"; hooks store generic waiting kinds instead of commands or notification text
 - One orange everywhere: the light-mode attention color is derived from system orange instead of a hardcoded brown; the console root is clear so the popover material shows through; fills double under Increase Contrast; row glyphs use secondary label color
 - Copying a path for an unsupported terminal now says "Copied" in the row; tooltips name the terminal that can't be focused
 - The needs-input sound is Ping instead of Sosumi
@@ -18,6 +18,23 @@
 - Granting a permission now flips the session back to working immediately: a `PreToolUse` hook (`ccbeacon.sh resume`) is installed for Claude Code and only writes when the session was waiting. Previously the app waited for the transcript to change, which could take as long as the approved tool ran
 - `fmtElapsed` spaces units ("2h 1m") and adds days
 
+
+### Fixed
+- Codex waiting sessions retain keep-awake through long approved commands; idle and ended sessions release it
+- Answered questions cancel pending sounds even during asynchronous validation; tool-call IDs correlate Codex answers
+- Standalone Codex permission prompts use visual signals only because hooks do not report approval resolution separately
+- Optional `codex-beacon` launcher and read-only shared-server monitoring clear amber when Codex resumes, with live validation of delayed alerts
+- Release builds check out the exact successful CI commit and verify its tag against appVersion
+- Stale cleanup shares persistent locks with hook writers and preserves concurrently refreshed state
+- Claude startup and failed turns no longer show successful completion; hooks retain lifecycle outcomes
+- Transcript replacement resets token totals, and failed reads retry without requiring another file change
+- Clearing waiting state correctly changes an overlapping completion beacon from orange to green
+- Each row completion dot expires independently; header text stays clear of its controls
+
+### Refactored
+- Session loading and transcript parsing run on a serial background store; UI actions reuse published snapshots
+- Shared transcript transport, hook installation, locking, atomic writes, and process discovery replace duplicated infrastructure
+- Typed lifecycle, notification, and presentation policies live in CCBeaconCore with regression coverage
 
 ## [2.1.3] - 2026-07-02
 

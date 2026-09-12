@@ -46,11 +46,12 @@ class CodexHookTests(unittest.TestCase):
         self.fire("UserPromptSubmit")
         command = "  git   push origin main\n"
         state = self.fire("PermissionRequest", tool_name="Bash", tool_input={"command": command})
-        self.assertEqual(state["detail"], "Bash: git push origin main")
+        self.assertEqual(state["detail"], "permission")
+        self.assertNotIn("git push", self.path.read_text())
         state = self.fire("PostToolUse", tool_name="Bash", tool_input={"command": command})
         self.assertEqual(state["detail"], "")
         state = self.fire("PermissionRequest", tool_name="apply_patch", tool_input={"patch": "x"})
-        self.assertEqual(state["detail"], "apply_patch")
+        self.assertEqual(state["detail"], "permission")
         self.assertEqual(self.fire("Stop")["detail"], "")
 
     def test_parallel_approvals(self):
@@ -69,6 +70,26 @@ class CodexHookTests(unittest.TestCase):
         self.fire("UserPromptSubmit")
         self.assertEqual(self.fire("PreToolUse", tool_name="request_user_input", tool_input={})["state"], "waiting")
         self.assertEqual(self.fire("PostToolUse", tool_name="request_user_input", tool_input={})["state"], "working")
+
+    def test_question_answer_correlates_by_invocation(self):
+        self.fire("UserPromptSubmit")
+        state = self.fire("PreToolUse", tool_name="request_user_input", tool_use_id="question-1", tool_input={"questions": ["One?"]})
+        self.assertEqual(state["state"], "waiting")
+        state = self.fire("PostToolUse", tool_name="request_user_input", tool_use_id="question-1", tool_input={})
+        self.assertEqual(state["state"], "working")
+        self.assertEqual(state["pending_tools"], [])
+
+    def test_parallel_questions_keep_other_request_waiting(self):
+        self.fire("UserPromptSubmit")
+        for call in ("a", "b"):
+            self.fire("PreToolUse", tool_name="request_user_input", tool_use_id=call, tool_input={})
+        self.assertEqual(self.fire("PostToolUse", tool_name="request_user_input", tool_use_id="a", tool_input={})["state"], "waiting")
+        self.assertEqual(self.fire("PostToolUse", tool_name="request_user_input", tool_use_id="b", tool_input={})["state"], "working")
+
+    def test_permission_without_id_matches_completion_with_id(self):
+        self.fire("UserPromptSubmit")
+        self.fire("PermissionRequest", tool_name="Bash", tool_input={"command": "long command"})
+        self.assertEqual(self.fire("PostToolUse", tool_name="Bash", tool_use_id="exec-1", tool_input={"command": "long command"})["state"], "working")
 
     def test_interruption(self):
         self.fire("UserPromptSubmit")

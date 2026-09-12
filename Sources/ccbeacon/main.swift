@@ -1,4 +1,17 @@
 import Cocoa
+import CCBeaconCore
+
+// Read-only diagnostic: does not launch the menu app or install hooks.
+if CommandLine.arguments.contains("--codex-status") {
+    guard let threads = CodexRuntimeClient().read() else {
+        fputs("Codex shared server unavailable\n", stderr)
+        exit(1)
+    }
+    let statuses = threads.map { ["id": $0.id, "state": $0.state.rawValue, "detail": $0.detail] }
+    let data = try! JSONSerialization.data(withJSONObject: statuses, options: [.prettyPrinted, .sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
+    exit(0)
+}
 
 let app = NSApplication.shared
 

@@ -136,7 +136,7 @@ func checkDashboardInteractions() {
     // Header answers the question; rows say what is being asked.
     precondition(texts().contains("2 need input"), "Header must count sessions needing input")
     precondition(texts().contains("Nothing else running"), "Header subline must describe the rest")
-    precondition(texts().contains { $0.contains("Needs permission for Bash") }, "Waiting rows must say what the agent needs")
+    precondition(texts().contains { $0.contains("Needs permission") }, "Waiting rows must say what the agent needs")
     precondition(texts().contains { $0.contains("Waiting for you") }, "Unknown asks still read as waiting")
     precondition(texts().contains { $0.hasPrefix("waiting ") }, "Clocks carry the state verb")
     precondition(rows()[0].identifier?.rawValue == "unsupported", "Longest-waiting session comes first")
@@ -153,7 +153,7 @@ func checkDashboardInteractions() {
     precondition(openButtons[0].frame.height == 64, "Rows must stay compact")
     precondition(openButtons[0].hitTest(NSPoint(x: openButtons[0].frame.minX + 30, y: openButtons[0].frame.minY + 15)) === openButtons[0], "The whole row is actionable")
     precondition(openButtons[0].toolTip?.contains("100 in") == true, "Usage must be available on hover")
-    precondition(openButtons[0].accessibilityLabel()?.contains("Needs permission for Bash") == true,
+    precondition(openButtons[0].accessibilityLabel()?.contains("Needs permission") == true,
                  "VoiceOver hears the ask")
 
     // Header controls: sounds and quit sit side by side, no menu in between.
@@ -267,19 +267,69 @@ func checkDashboardInteractions() {
     }
     delegate.updateButton([session("attention", "working")])
     precondition(delegate.attentionTimer == nil && button.image!.isTemplate, "Resuming stops the signal")
-    delegate.updateButton([session("attention", "idle", age: 2), session("other", "working")])
+    delegate.updateButton([session("attention", "idle", age: 2, lastEvent: "Stop"), session("other", "working")])
     precondition(!button.image!.isTemplate, "A fresh completion shows even while others work")
     precondition(button.toolTip == "ccbeacon · 1 working · 1 idle", "Tooltip states counts once")
+
+    // Overlapping completion and waiting must switch actual artwork colors.
+    let recent = session("recent", "idle", age: 2, lastEvent: "Stop")
+    delegate.updateButton([recent, session("ask", "waiting")])
+    if let pulse = delegate.attentionTimer { for _ in 0..<80 { pulse.fire() } }
+    let orangeArt = button.image!.tiffRepresentation
+    delegate.updateButton([recent])
+    precondition(button.image!.tiffRepresentation != orangeArt, "Clearing input while completion remains changes orange to green")
+    delegate.updateButton([session("startup", "idle", age: 1, lastEvent: "SessionStart")])
+    precondition(button.image!.isTemplate, "New sessions never celebrate a completed task")
+
+    // Each dot expires independently, without replacing row controls.
+    let first = session("first", "idle", age: 5, lastEvent: "Stop")
+    let second = session("second", "idle", age: 1, lastEvent: "Stop")
+    let clock = Date().timeIntervalSince1970
+    dashboard.refresh([first, second], muted: false, now: clock)
+    let firstRow = rows().first { $0.identifier?.rawValue == "first" }!
+    dashboard.refresh([first, second], muted: false, now: clock + 6)
+    precondition(rows().contains { $0 === firstRow }, "Completion expiration preserves row controls")
+    precondition(firstRow.subviews.compactMap { $0 as? StateDot }.first!.kind == .idle,
+                 "Older completion dot expires while the latest remains green")
+    precondition(rows().first { $0.identifier?.rawValue == "second" }!.subviews.compactMap { $0 as? StateDot }.first!.kind == .finished,
+                 "Younger completion keeps its full window")
+    precondition(!texts().contains { $0.contains("permission for") || $0.contains("git push") }, "Permission context stays out of the UI")
+    for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+        dashboard.view.appearance = NSAppearance(named: appearance)
+        dashboard.refresh([session("long", "idle", age: 1, cwd: "/tmp/a-very-long-project-name-that-used-to-overlap-controls", lastEvent: "Stop")], muted: false)
+        let header = (dashboard.view as! DashboardSurface).header
+        let controls = header.subviews.compactMap { $0 as? HeaderIconButton }
+        for label in header.subviews.compactMap({ $0 as? NSTextField }) {
+            precondition(controls.allSatisfy { !label.frame.intersects($0.frame) }, "Header text and controls never overlap")
+        }
+    }
+
+    // Shared-server state overrides a stale permission hook immediately after an answer.
+    let serverOverlay = CodexRuntimeOverlay()
+    let stalePermission = session("codex:server", "waiting", provider: .codex, detail: "permission")
+    let awaiting = CodexRuntimeThread(["id": "server", "status": ["type": "active", "activeFlags": ["waitingOnApproval"]]])!
+    let resumed = CodexRuntimeThread(["id": "server", "status": ["type": "active", "activeFlags": [String]()]])!
+    let runtimeWaiting = serverOverlay.merge([stalePermission], runtime: [awaiting])
+    delegate.updateButton(runtimeWaiting)
+    precondition(!button.image!.isTemplate, "Unanswered shared-server request is amber")
+    let runtimeWorking = serverOverlay.merge([stalePermission], runtime: [resumed])
+    delegate.updateButton(runtimeWorking)
+    precondition(button.image!.isTemplate && delegate.attentionTimer == nil,
+                 "Answer restores working beacon before the tool completes")
+    dashboard.refresh(runtimeWorking, muted: false)
+    precondition(texts().contains("1 working"), "Dashboard follows live Codex status")
 
     // Sleep assertion follows working sessions and the preference.
     delegate.keepAwake = true
     delegate.updateSleepAssertion(working: true)
-    precondition(delegate.sleepAssertion != nil, "Working sessions hold a sleep assertion")
-    delegate.updateSleepAssertion(working: false)
-    precondition(delegate.sleepAssertion == nil, "No working session releases it")
+    precondition(delegate.sleepAssertion != nil && delegate.displaySleepAssertion != nil, "Working sessions hold a sleep assertion")
+    delegate.updateSleepAssertion(working: session("codex-approval", "waiting", provider: .codex).needsKeepAwake)
+    precondition(delegate.sleepAssertion != nil && delegate.displaySleepAssertion != nil, "Codex approval keeps the assertion through a long command")
+    delegate.updateSleepAssertion(working: session("codex-idle", "idle", provider: .codex).needsKeepAwake)
+    precondition(delegate.sleepAssertion == nil && delegate.displaySleepAssertion == nil, "No working session releases it")
     delegate.keepAwake = false
     delegate.updateSleepAssertion(working: true)
-    precondition(delegate.sleepAssertion == nil, "Disabled keep-awake never asserts")
+    precondition(delegate.sleepAssertion == nil && delegate.displaySleepAssertion == nil, "Disabled keep-awake never asserts")
 
     // Exercise the real anchored NSPopover as well as the standalone view.
     let anchored = DashboardController()
@@ -306,7 +356,7 @@ func checkDashboardInteractions() {
     actionable.keyDown(with: enter)
     precondition(activated, "Return opens the focused session")
     let originalFrame = anchored.view.window!.frame
-    anchored.refresh(initial.map { session($0.id, $0.state, tokens: 300, terminal: $0.terminal, age: 500, detail: $0.detail) }, muted: false)
+    anchored.refresh(initial.map { session($0.id, $0.state.rawValue, tokens: 300, terminal: $0.terminal, age: 500, detail: $0.detail) }, muted: false)
     precondition(anchored.view.window!.frame == originalFrame, "Usage updates must keep the actual popover anchored")
     anchored.refresh(initial + (0..<20).map { session("arrival-\($0)", "working") }, muted: false)
     precondition(anchored.view.window!.frame == originalFrame, "Live arrivals must not resize an open popover")

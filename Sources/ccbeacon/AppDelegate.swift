@@ -11,15 +11,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var attentionOpacity: CGFloat = 1
     private var attentionPhase: Double = 0
     private var knownWaiting: Set<String> = []
-    private var beaconKey = ""
+    private var beaconDescriptor: BeaconDescriptor?
     private var lastSessions: [Session] = []
     var watchers: [DispatchSourceFileSystemObject] = []
-    var prevStates: [String: String] = [:]
+    private var notificationPolicy = NotificationPolicy()
+    private let sessionStore = SessionStore(runtime: CodexRuntimeClient())
+    private var receivedInitialSnapshot = false
+    private var sessions: [Session] = []
+    private var waitingAlerts = WaitingAlerts()
     var pendingWaits: [String: DispatchWorkItem] = [:]
     var isMuted = UserDefaults.standard.bool(forKey: "muted")
     /// Keep the Mac awake while any session is working (on unless the user turns it off).
     var keepAwake = UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true
     private(set) var sleepAssertion: IOPMAssertionID?
+    private(set) var displaySleepAssertion: IOPMAssertionID?
     let popover = NSPopover()
     let dashboard = DashboardController()
 
@@ -42,9 +47,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.image = BeaconMark.image(size: 18)
         statusItem.button?.imagePosition = .imageOnly
-        let initial = loadAllSessions()
-        prevStates = Dictionary(uniqueKeysWithValues: initial.map { ($0.id, $0.state) })
-        knownWaiting = Set(initial.filter { $0.state == "waiting" }.map { $0.id })
         watchSessionsDir()
         dashboard.watchedProviders = FileManager.default.fileExists(atPath: codexHome) ? [.claude, .codex] : [.claude]
         update()
@@ -76,57 +78,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: Update cycle
 
     func update() {
-        let sessions = loadAllSessions()
-        fireNotifications(sessions)
-        updateButton(sessions)
-        updateSleepAssertion(working: sessions.contains { $0.state == "working" })
-        if popover.isShown { dashboard.refresh(sessions, muted: isMuted) }
+        sessionStore.refresh { [weak self] sessions in
+            guard let self else { return }
+            self.sessions = sessions
+            if !self.receivedInitialSnapshot {
+                self.notificationPolicy.seed(sessions)
+                self.knownWaiting = Set(sessions.filter { $0.state == .waiting }.map { $0.id })
+                self.receivedInitialSnapshot = true
+            }
+            self.fireNotifications(sessions)
+            self.updateButton(sessions)
+            self.updateSleepAssertion(working: sessions.contains { $0.needsKeepAwake })
+            if self.popover.isShown { self.dashboard.refresh(sessions, muted: self.isMuted) }
+        }
     }
 
     @objc func togglePopover() {
         if popover.isShown { popover.performClose(nil); return }
         guard let button = statusItem.button else { return }
-        dashboard.show(in: popover, relativeTo: button, sessions: loadAllSessions(), muted: isMuted)
+        dashboard.show(in: popover, relativeTo: button, sessions: sessions, muted: isMuted)
         popover.contentViewController?.view.window?.makeKey()
     }
 
     // MARK: Notifications
 
     func fireNotifications(_ sessions: [Session]) {
-        let currentIds = Set(sessions.map { $0.id })
-        for session in sessions {
-            let prev = prevStates[session.id]
-            guard prev != session.state else { continue }
-            switch session.state {
-            case "waiting":
-                let sid = session.id; let tpath = session.transcriptPath
-                pendingWaits[sid]?.cancel()
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self = self else { return }
+        let changes = notificationPolicy.update(sessions)
+        waitingAlerts.reconcile(sessions)
+        for id in changes.cancelWaiting {
+            pendingWaits.removeValue(forKey: id)?.cancel()
+        }
+        for session in changes.waiting {
+            let sid = session.id
+            let ticket = waitingAlerts.schedule(session)
+            pendingWaits.removeValue(forKey: sid)?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.waitingAlerts.contains(ticket) else { return }
+                // Refresh on the store queue before playing; no disk I/O on the UI thread.
+                self.sessionStore.validateWaiting(session) { [weak self] current in
+                    guard let self, self.waitingAlerts.consume(ticket, current: current) else { return }
                     self.pendingWaits.removeValue(forKey: sid)
-                    guard loadAllSessions().first(where: { $0.id == sid })?.state == "waiting" else { return }
-                    if session.provider == .claude, !tpath.isEmpty,
-                       let attrs = try? FileManager.default.attributesOfItem(atPath: tpath),
-                       let mtime = attrs[.modificationDate] as? Date,
-                       Date().timeIntervalSince(mtime) < 5 { return }
-                    // A request from a collaborator, not an error: a soft ping, not Sosumi.
                     self.playSound("Ping")
                 }
-                pendingWaits[sid] = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
-            case "idle" where prev == "working" || prev == "waiting":
-                pendingWaits[session.id]?.cancel(); pendingWaits.removeValue(forKey: session.id)
-                if session.lastEvent != "Interrupt" { playSound("Glass") }
-            default:
-                if prev == "waiting" {
-                    pendingWaits[session.id]?.cancel(); pendingWaits.removeValue(forKey: session.id)
-                }
+
             }
+            pendingWaits[sid] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
         }
-        for id in pendingWaits.keys where !currentIds.contains(id) {
-            pendingWaits[id]?.cancel(); pendingWaits.removeValue(forKey: id)
-        }
-        prevStates = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.state) })
+        for _ in changes.completed { playSound("Glass") }
     }
 
     // Audio cue only — the visual "notification" is the menu bar icon changing state.
@@ -162,12 +162,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if waiting == 0 { stopAttentionFlash() }
         button.title = ""
         updateWorkingBreath(working: working > 0 && waiting == 0 && !justFinished)
-        let color: NSColor? = waiting > 0 ? NSColor.systemOrange.withAlphaComponent(attentionOpacity)
-            : justFinished ? .systemGreen : nil
-        // Only redraw the artwork when the state it describes changes.
-        let key = "\(color.map { "\($0.alphaComponent)" } ?? "template")|\(justFinished)"
-        if key != beaconKey {
-            beaconKey = key
+        let descriptor = BeaconDescriptor(sessions: sessions, opacity: Double(attentionOpacity))
+        let color: NSColor?
+        switch descriptor.signal {
+        case .attention: color = NSColor.systemOrange.withAlphaComponent(CGFloat(descriptor.opacity))
+        case .completion: color = .systemGreen
+        case .neutral: color = nil
+        }
+        if descriptor != beaconDescriptor {
+            beaconDescriptor = descriptor
             button.contentTintColor = nil
             button.image = BeaconMark.image(size: 18, color: color)
         }
@@ -284,34 +287,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func toggleMute() {
         isMuted.toggle()
         UserDefaults.standard.set(isMuted, forKey: "muted")
-        dashboard.refresh(loadAllSessions(), muted: isMuted)
+        dashboard.refresh(sessions, muted: isMuted)
     }
 
     // MARK: Sleep
 
-    // The same assertion `caffeinate -i` takes: the system stays up while an agent
-    // works, the display may still sleep. Released as soon as nothing is working.
+    // Hold system and display assertions together while Awake is enabled and needed.
     func updateSleepAssertion(working: Bool) {
         let wanted = keepAwake && working
-        if wanted, sleepAssertion == nil {
-            var id = IOPMAssertionID(0)
-            let result = IOPMAssertionCreateWithName(
-                kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
-                IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                "ccbeacon: an agent session is working" as CFString, &id)
-            if result == kIOReturnSuccess { sleepAssertion = id }
-        } else if !wanted, let id = sleepAssertion {
-            IOPMAssertionRelease(id)
-            sleepAssertion = nil
+        func update(_ assertion: inout IOPMAssertionID?, type: CFString) {
+            if wanted, assertion == nil {
+                var id = IOPMAssertionID(0)
+                let result = IOPMAssertionCreateWithName(
+                    type, IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                    "ccbeacon: an agent session is active" as CFString, &id)
+                if result == kIOReturnSuccess { assertion = id }
+            } else if !wanted, let id = assertion {
+                IOPMAssertionRelease(id)
+                assertion = nil
+            }
         }
+        update(&sleepAssertion, type: kIOPMAssertionTypePreventUserIdleSystemSleep as CFString)
+        update(&displaySleepAssertion, type: kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString)
     }
 
     @objc func toggleKeepAwake() {
         keepAwake.toggle()
         UserDefaults.standard.set(keepAwake, forKey: "keepAwake")
         dashboard.keepAwake = keepAwake
-        let sessions = loadAllSessions()
-        updateSleepAssertion(working: sessions.contains { $0.state == "working" })
+        updateSleepAssertion(working: sessions.contains { $0.needsKeepAwake })
         dashboard.refresh(sessions, muted: isMuted)
     }
 }

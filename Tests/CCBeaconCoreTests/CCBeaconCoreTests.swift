@@ -89,11 +89,11 @@ suite("stateClock") {
 
 suite("waitingSummary") {
     expect(waitingSummary(""), "Waiting for you", "unknown detail")
-    expect(waitingSummary("Claude needs your permission to use Bash"), "Needs permission for Bash", "claude permission")
+    expect(waitingSummary("Claude needs your permission to use Bash"), "Needs permission", "claude permission")
     expect(waitingSummary("Claude is waiting for your input"), "Waiting for your answer", "claude idle prompt")
-    expect(waitingSummary("Bash: git push origin main"), "Needs permission for Bash · git push origin main", "codex tool + command")
-    expect(waitingSummary("apply_patch"), "apply_patch", "codex tool only")
-    expect(waitingSummary("Something else entirely"), "Something else entirely", "passthrough")
+    expect(waitingSummary("Bash: git push origin main"), "Needs permission", "codex tool + command")
+    expect(waitingSummary("apply_patch"), "Needs permission", "codex tool only")
+    expect(waitingSummary("Something else entirely"), "Needs permission", "passthrough")
 }
 
 suite("consoleOrder") {
@@ -277,12 +277,12 @@ suite("loadSessions") {
     writeSession(dir: dir2, id: "recycled", state: "working", ts: 1000, pid: alivePid)
     expect(loadSessions(dir: dir2).count, 0, "recycled PID treated as dead")
 
-    // Lock files are cleaned up alongside stale session files.
+    // Persistent bucket locks survive stale session cleanup.
     let dir3 = makeTmpDir("sessions-3")
     writeSession(dir: dir3, id: "locked", state: "done", ts: now - 100, pid: deadPid)
-    fm.createFile(atPath: dir3 + "/locked.json.lock", contents: nil)
+    let lockPath = sessionLockPath(for: dir3 + "/locked.json")
     _ = loadSessions(dir: dir3)
-    expect(fm.fileExists(atPath: dir3 + "/locked.json.lock"), false, "lock file deleted with session")
+    expect(fm.fileExists(atPath: lockPath), true, "persistent lock survives cleanup")
 
     // waiting → working override when the transcript moved on after the waiting event.
     let dir4 = makeTmpDir("sessions-4")
@@ -377,6 +377,206 @@ suite("Codex integration") {
     expect(loadSessions(dir: codexDir, provider: .codex)[0].lastEvent, "Interrupt", "interruption remains distinguishable from completion")
     writeCodex("working", pid: spawnDeadPid())
     expect(loadSessions(dir: codexDir, provider: .codex).count, 0, "dead Codex processes removed")
+}
+
+suite("Lifecycle and notification policy") {
+    func session(_ state: String, _ event: String, ts: TimeInterval = 995) -> Session {
+        Session(id: "test", state: state, ts: ts, cwd: "/tmp/test", transcriptPath: "",
+                totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", lastEvent: event)
+    }
+    for event in ["SessionStart", "StopFailure", "Interrupt", ""] {
+        expect(session("idle", event).finished(within: 10, now: 1000), false, "\(event) never celebrates completion")
+    }
+    expect(session("idle", "Stop").finished(within: 10, now: 1000), true, "successful stop celebrates")
+    expect(session("idle", "Stop", ts: 990).finished(within: 10, now: 1000), false, "completion expires at ten seconds")
+    expect(session("idle", "Stop", ts: 1001).finished(within: 10, now: 1000), false, "future timestamp does not celebrate")
+    var policy = NotificationPolicy()
+    policy.seed([session("working", "UserPromptSubmit")])
+    expect(policy.update([session("idle", "StopFailure")]).completed.count, 0, "failed stop is silent")
+    _ = policy.update([session("working", "UserPromptSubmit")])
+    expect(policy.update([session("idle", "Stop")]).completed.count, 1, "successful transition sounds once")
+    expect(policy.update([session("idle", "Stop")]).completed.count, 0, "repeated completion is silent")
+    expect(policy.update([session("waiting", "Notification")]).waiting.count, 1, "new waiting schedules a ping")
+    expect(policy.update([]).cancelWaiting.contains("test"), true, "removed sessions cancel pending pings")
+    let completed = session("idle", "Stop")
+    let orange = BeaconDescriptor(sessions: [session("waiting", "Notification"), completed], now: 1000)
+    let green = BeaconDescriptor(sessions: [completed], now: 1000)
+    expect(orange == green, false, "orange and green cannot share an artwork descriptor")
+}
+
+suite("Transcript replacement and retry") {
+    let path = makeTmpDir("replacement") + "/transcript.jsonl"
+    var offsets: [UInt64] = []
+    var failNext = false
+    let reader = TranscriptReader(readTail: { path, offset in
+        offsets.append(offset)
+        if failNext { failNext = false; throw NSError(domain: "fixture", code: 1) }
+        let handle = FileHandle(forReadingAtPath: path)!
+        defer { try? handle.close() }
+        try handle.seek(toOffset: offset)
+        return try handle.readToEnd() ?? Data()
+    })
+    try! assistantLine(111, 1, model: "a").write(toFile: path, atomically: true, encoding: .utf8)
+    expect(reader.read(path, provider: .claude).input, 111, "initial usage")
+    try! assistantLine(999, 1, model: "b").write(toFile: path, atomically: true, encoding: .utf8)
+    expect(reader.read(path, provider: .claude).input, 999, "equal-size replacement resets usage")
+    try! (assistantLine(200, 1, model: "c") + assistantLine(300, 1, model: "c")).write(toFile: path, atomically: true, encoding: .utf8)
+    expect(reader.read(path, provider: .claude).input, 500, "larger replacement resets usage")
+    let before = offsets.count
+    _ = reader.read(path, provider: .claude)
+    expect(offsets.count, before, "unchanged transcript performs no read")
+    let size = (try! FileManager.default.attributesOfItem(atPath: path)[.size] as! NSNumber).uint64Value
+    append(assistantLine(1, 1, model: "c"), to: path)
+    failNext = true
+    expect(reader.read(path, provider: .claude).input, 500, "failed tail read preserves prior totals")
+    expect(reader.read(path, provider: .claude).input, 501, "unchanged metadata after failure is retried")
+    expect(offsets.last!, size, "append reads from consumed byte offset")
+}
+
+suite("Synchronized cleanup") {
+    let fm = FileManager.default
+    let path = makeTmpDir("cleanup") + "/session.json"
+    let old = Data("old".utf8), fresh = Data("fresh".utf8)
+    try! fresh.write(to: URL(fileURLWithPath: path), options: .atomic)
+    expect(removeSessionIfUnchanged(path: path, observed: old), false, "fresh replacement survives stale cleanup")
+    expect(fm.contents(atPath: path) == fresh, true, "new state remains intact")
+    let lockPath = sessionLockPath(for: path)
+    let fd = open(lockPath, O_RDWR)
+    precondition(fd >= 0 && flock(fd, LOCK_EX) == 0)
+    expect(removeSessionIfUnchanged(path: path, observed: fresh), false, "active writer prevents cleanup")
+    flock(fd, LOCK_UN); close(fd)
+    expect(removeSessionIfUnchanged(path: path, observed: fresh), true, "unchanged stale state can be deleted")
+    expect(fm.fileExists(atPath: lockPath), true, "lock inode remains reusable")
+    let dir = makeTmpDir("injected-environment")
+    writeSession(dir: dir, id: "working", state: "working", ts: 100, pid: 42)
+    let live = SessionRepository(environment: SessionEnvironment(now: { 10000 }, processIsDead: { _, _ in false }))
+    expect(live.loadSessions(dir: dir).count, 1, "injected live process survives an old clock")
+    let dead = SessionRepository(environment: SessionEnvironment(now: { 10000 }, processIsDead: { _, _ in true }))
+    expect(dead.loadSessions(dir: dir).count, 0, "injected dead process is cleaned up")
+}
+
+suite("Integration installation") {
+    let home = makeTmpDir("integration")
+    let script = Data("#!/bin/sh\n".utf8)
+    let config = home + "/settings.json"
+    let original = Data("{\"theme\":\"dark\"}".utf8)
+    try! original.write(to: URL(fileURLWithPath: config))
+    try! installIntegration(home: home, configName: "settings.json", script: script, merge: mergedHookSettings)
+    let installed = FileManager.default.contents(atPath: config)!
+    let settings = try! JSONSerialization.jsonObject(with: installed) as! [String: Any]
+    expect(settings["theme"] as? String ?? "", "dark", "installation preserves unrelated settings")
+    let hook = home + "/hooks/ccbeacon.sh"
+    try! FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: hook)
+    try! installIntegration(home: home, configName: "settings.json", script: script, merge: mergedHookSettings)
+    expect((try! FileManager.default.attributesOfItem(atPath: hook)[.posixPermissions] as! NSNumber).intValue, 0o755,
+           "identical script has executable permissions repaired")
+    expect(FileManager.default.contents(atPath: config) == installed, true, "complete settings are not rewritten")
+    let invalid = Data("{\"hooks\":42}".utf8)
+    try! invalid.write(to: URL(fileURLWithPath: config))
+    var reported = false
+    do { try installIntegration(home: home, configName: "settings.json", script: script, merge: mergedHookSettings) }
+    catch { reported = true }
+    expect(reported, true, "malformed configuration reports an error")
+    expect(FileManager.default.contents(atPath: config) == invalid, true, "malformed configuration remains untouched")
+    expect(mergedHookSettings(["hooks": 42]) == nil, true, "Claude merge rejects malformed hooks")
+}
+
+suite("Background session store") {
+    let dir = makeTmpDir("background-store")
+    let transcript = dir + "/large.jsonl"
+    let line = assistantLine(1, 1, model: "fixture")
+    let large = String(repeating: line, count: 100_000)
+    try! large.write(toFile: transcript, atomically: true, encoding: .utf8)
+    writeSession(dir: dir, id: "large", state: "working", ts: Date().timeIntervalSince1970, pid: Int(getpid()), transcript: transcript)
+    let store = SessionStore(claudeDir: dir, codexDir: dir + "/missing")
+    var deliveries = 0
+    var mainTaskRan = false
+    var mainDelay: TimeInterval = 0
+    let start = Date()
+    for _ in 0..<3 {
+        store.refresh { sessions in
+            expect(Thread.isMainThread, true, "snapshot delivered on main thread")
+            expect(mainTaskRan, true, "main queue remains responsive during initial parsing")
+            expect(sessions.first?.inputTokens ?? 0, 100_000, "background snapshot has complete totals")
+            deliveries += 1
+        }
+    }
+    DispatchQueue.main.async { mainTaskRan = true; mainDelay = Date().timeIntervalSince(start) }
+    let deadline = Date(timeIntervalSinceNow: 10)
+    while deliveries < 3 && Date() < deadline {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    expect(deliveries, 3, "coalescing delivers every refresh callback")
+    print(String(format: "  %.1f MB initial load: %.3fs; main queue response: %.3fs", Double(large.utf8.count) / 1_000_000,
+                 Date().timeIntervalSince(start), mainDelay))
+}
+
+suite("Answered requests and Codex keep awake") {
+    func session(_ state: String, ts: TimeInterval = 100, detail: String = "input", provider: AgentProvider = .codex) -> Session {
+        Session(id: "question", state: state, ts: ts, cwd: "/tmp", transcriptPath: "", totalTokens: 0,
+                inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: provider, detail: detail)
+    }
+    var alerts = WaitingAlerts()
+    let waiting = session("waiting")
+    let cancelled = alerts.schedule(waiting)
+    alerts.reconcile([session("working")])
+    expect(alerts.contains(cancelled), false, "answer before timer invalidates the alert")
+    expect(alerts.consume(cancelled, current: waiting), false, "stale in-flight validation cannot play a cancelled sound")
+    let answered = alerts.schedule(waiting)
+    expect(alerts.consume(answered, current: session("working")), false, "fresh state suppresses an answered request without a UI refresh")
+    let old = alerts.schedule(waiting)
+    alerts.reconcile([])
+    let newer = alerts.schedule(session("waiting", ts: 101))
+    expect(alerts.consume(old, current: waiting), false, "old callback cannot consume a newer request")
+    expect(alerts.consume(newer, current: session("waiting", ts: 101)), true, "unanswered question still sounds")
+    expect(alerts.consume(newer, current: session("waiting", ts: 101)), false, "a request sounds at most once")
+    let permission = session("waiting", detail: "permission")
+    let ticket = alerts.schedule(permission)
+    expect(alerts.consume(ticket, current: permission), false, "unobservable Codex approval resolution never causes a late ping")
+    expect(session("working").needsKeepAwake, true, "Codex working holds awake")
+    expect(permission.needsKeepAwake, true, "Codex waiting holds awake through long approved commands")
+    expect(session("idle").needsKeepAwake, false, "Codex idle releases awake")
+    expect(session("waiting", provider: .claude).needsKeepAwake, false, "Claude waiting keeps its existing sleep behavior")
+    var policy = NotificationPolicy()
+    policy.seed([waiting])
+    expect(policy.update([session("waiting", ts: 101)]).waiting.count, 1, "a new waiting request is recognized even between refreshes")
+}
+
+suite("Codex live runtime status") {
+    func runtime(_ flags: [String], type: String = "active") -> CodexRuntimeThread {
+        CodexRuntimeThread(["id": "live", "cwd": "/tmp/live", "status": ["type": type, "activeFlags": flags]])!
+    }
+    let hook = Session(id: "codex:live", state: "waiting", ts: 100, cwd: "/tmp/live", transcriptPath: "",
+        totalTokens: 10, inputTokens: 10, outputTokens: 0, cacheTokens: 0, model: "fixture", provider: .codex, detail: "permission")
+    let overlay = CodexRuntimeOverlay()
+    let waiting = overlay.merge([hook], runtime: [runtime(["waitingOnApproval"])], now: 101)[0]
+    expect(waiting.state, "waiting", "server confirms approval is pending")
+    expect(waiting.runtimeStatusVerified, true, "runtime verification is explicit")
+    var alerts = WaitingAlerts()
+    let ticket = alerts.schedule(waiting)
+    let working = overlay.merge([hook], runtime: [runtime([])], now: 102)[0]
+    expect(working.state, "working", "answer clears amber before tool completion despite stale hook")
+    expect(working.ts, 102.0, "working clock begins when answer is observed")
+    expect(working.totalTokens, 10, "runtime preserves hook usage")
+    expect(working.needsKeepAwake, true, "resumed command keeps awake")
+    expect(alerts.consume(ticket, current: working), false, "answered approval cannot sound")
+    expect(overlay.merge([hook], runtime: [runtime([])], now: 103)[0].ts, 102.0, "polling preserves the state clock")
+    let parallel = overlay.merge([hook], runtime: [runtime(["waitingOnApproval", "waitingOnUserInput"])], now: 104)[0]
+    expect(parallel.state, "waiting", "parallel pending requests keep amber")
+    let oneLeft = overlay.merge([hook], runtime: [runtime(["waitingOnApproval"])], now: 105)[0]
+    expect(oneLeft.state, "waiting", "answering one of several requests does not clear another")
+    let activeTicket = alerts.schedule(oneLeft)
+    expect(alerts.consume(activeTicket, current: oneLeft, now: 114), true, "verified unanswered approvals can sound again")
+    expect(overlay.merge([hook], runtime: [runtime([], type: "idle")], now: 106)[0].finished(within: 10, now: 107), false,
+           "runtime idle alone never invents a successful completion")
+    expect(overlay.merge([hook], runtime: nil)[0].runtimeStatusVerified, false, "disconnect discards verification")
+    expect(overlay.merge([hook], runtime: nil)[0].state, "waiting", "disconnect falls back to hook state")
+    expect(overlay.merge([], runtime: [runtime([])]).count, 1, "shared sessions appear without trusted hooks")
+    expect(CodexRuntimeThread(["id": "child", "parentThreadId": "root", "status": ["type": "idle"]]) == nil, true,
+           "child threads cannot override parents")
+    expect(CodexRuntimeThread(["id": "live", "status": ["type": "notLoaded"]]) == nil, true, "unloaded status is not working")
+    expect(CodexRuntimeThread(["id": "live", "status": ["type": "active", "activeFlags": ["futureFlag"]]]) == nil, true,
+           "unknown flags never imply an answered request")
 }
 
 try? FileManager.default.removeItem(atPath: tmpRoot)

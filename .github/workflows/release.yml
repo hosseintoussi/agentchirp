@@ -10,17 +10,27 @@ permissions:
 
 jobs:
   release:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Find version tag on this commit
         id: tag
         run: |
-          TAG=$(git tag --points-at ${{ github.event.workflow_run.head_sha }} | grep -E '^v[0-9]' | head -1)
+          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          if [ -n "$TAG" ]; then
+            test "$(git rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")"
+            VERSION=$(sed -n 's/public let appVersion = "\(.*\)"/\1/p' Sources/CCBeaconCore/Version.swift)
+            test "$TAG" = "v$VERSION"
+          fi
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Extract changelog
@@ -43,8 +53,8 @@ jobs:
           # which breaks the top-level-code test runner; only the app binary is needed.
           swift build -c release --arch arm64 --arch x86_64 --product ccbeacon
           mkdir dist
-          cp .build/apple/Products/Release/ccbeacon ccbeacon.sh dist/
-          tar -czf "ccbeacon-${TAG}-macos.tar.gz" -C dist ccbeacon ccbeacon.sh
+          cp .build/apple/Products/Release/ccbeacon ccbeacon.sh codex-beacon dist/
+          tar -czf "ccbeacon-${TAG}-macos.tar.gz" -C dist ccbeacon ccbeacon.sh codex-beacon
           echo "sha=$(shasum -a 256 ccbeacon-${TAG}-macos.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release

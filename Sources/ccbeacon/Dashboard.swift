@@ -270,43 +270,7 @@ final class SessionRow: ActionButton {
 
 // MARK: - Header copy
 
-struct ConsoleSummary {
-    let headline: String
-    let subline: String
-    let waiting: Int
-    let working: Int
-    let idle: Int
-    let finishedName: String?
-
-    static let completionWindow: TimeInterval = 10
-
-    init(_ sessions: [Session], watching: [AgentProvider], now: TimeInterval = Date().timeIntervalSince1970) {
-        waiting = sessions.filter { $0.state == "waiting" }.count
-        working = sessions.filter { $0.state == "working" }.count
-        idle = sessions.count - waiting - working
-        finishedName = sessions.filter { $0.finished(within: Self.completionWindow, now: now) }
-            .max { $0.ts < $1.ts }?.dirName
-        func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
-        let watchingLine = watching.contains(.codex)
-            ? "Watching Claude Code and Codex" : "Watching Claude Code · Codex not installed"
-        if waiting > 0 {
-            headline = "\(waiting) need\(waiting == 1 ? "s" : "") input"
-            let rest = [working > 0 ? "\(working) working" : nil, idle > 0 ? "\(idle) idle" : nil]
-                .compactMap { $0 }
-            subline = rest.isEmpty ? "Nothing else running" : rest.joined(separator: " · ")
-        } else if working > 0 {
-            headline = "\(working) working"
-            subline = finishedName.map { "\($0) just finished" }
-                ?? (idle > 0 ? "\(idle) idle · nothing needs you" : "Nothing needs you yet")
-        } else if idle > 0 {
-            headline = "All quiet"
-            subline = finishedName.map { "\($0) just finished" } ?? plural(idle, "idle session")
-        } else {
-            headline = "Nothing running"
-            subline = watchingLine
-        }
-    }
-
+extension ConsoleSummary {
     var markColor: NSColor {
         waiting > 0 ? attentionColor : finishedName != nil ? completionColor : .labelColor
     }
@@ -319,7 +283,14 @@ final class DashboardController: NSViewController {
     let width: CGFloat = 400
     private var surface: DashboardSurface { view as! DashboardSurface }
     var scroll: NSScrollView { surface.scroll }
-    private var signature = ""
+    private struct Signature: Equatable {
+        let rows: [SessionPresentation]
+        let headline: String
+        let subline: String
+        let muted: Bool
+        let keepAwake: Bool
+    }
+    private var signature: Signature?
     private var currentSessions: [Session] = []
     private var currentMuted = false
     private var pendingOffset: CGFloat?
@@ -335,7 +306,7 @@ final class DashboardController: NSViewController {
         presentationScreenHeight = screenHeight
         presentationListHeight = nil
         pendingOffset = 0
-        signature = ""
+        signature = nil
         refresh(sessions, muted: muted)
     }
 
@@ -381,12 +352,13 @@ final class DashboardController: NSViewController {
         return field
     }
 
-    private func clockText(_ session: Session) -> String {
+    private func clockText(_ session: Session, now: TimeInterval = Date().timeIntervalSince1970) -> String {
         if let until = copiedUntil[session.id], until > Date() { return "Copied" }
-        return stateClock(session.state, elapsed: session.elapsed)
+        return stateClock(session.state, elapsed: max(0, Int(now - session.ts)))
     }
 
-    func refresh(_ sessions: [Session], muted: Bool) {
+    func refresh(_ sessions: [Session], muted: Bool, now: TimeInterval = Date().timeIntervalSince1970) {
+        let sessions = consoleOrder(sessions)
         _ = view
         if presentationListHeight == nil {
             let screenHeight = presentationScreenHeight ?? NSScreen.main?.visibleFrame.height ?? 700
@@ -397,18 +369,23 @@ final class DashboardController: NSViewController {
             view.setFrameSize(NSSize(width: width, height: DashboardSurface.headerHeight + presentationListHeight!))
         }
         currentSessions = sessions; currentMuted = muted
-        let summary = ConsoleSummary(sessions, watching: watchedProviders)
+        let summary = ConsoleSummary(sessions, watching: watchedProviders, now: now)
         // Token and clock updates never replace focused controls or move the scroll position.
-        let next = sessions.map {
-            "\($0.provider.rawValue)|\($0.id)|\($0.state)|\($0.cwd)|\($0.model)|\($0.tty)|\($0.terminal)|\($0.detail)"
-        }.joined(separator: "\n") + "|\(muted)|\(keepAwake)|\(summary.finishedName ?? "")|\(copiedUntil.keys.sorted())"
+        let next = Signature(rows: sessions.map(SessionPresentation.init), headline: summary.headline,
+                             subline: summary.subline, muted: muted, keepAwake: keepAwake)
         if next != signature {
             signature = next
             rebuild(sessions, summary: summary)
         }
         for session in sessions {
-            clockLabels[session.id]?.stringValue = clockText(session)
-            sessionRows[session.id]?.toolTip = tooltip(session)
+            clockLabels[session.id]?.stringValue = clockText(session, now: now)
+            if let row = sessionRows[session.id] {
+                row.toolTip = tooltip(session)
+                let dot = row.subviews.compactMap { $0 as? StateDot }.first
+                dot?.kind = session.state == .waiting ? .waiting : session.state == .working ? .working
+                    : session.finished(within: ConsoleSummary.completionWindow, now: now) ? .finished : .idle
+                row.setAccessibilityLabel(accessibilityText(session, now: now))
+            }
         }
     }
 
@@ -451,9 +428,9 @@ final class DashboardController: NSViewController {
         mark.color = summary.markColor
         mark.setAccessibilityElement(false)
         header.addSubview(mark)
-        label(summary.headline, in: header, x: 44, y: 11, w: 300, size: 13, weight: .semibold,
+        label(summary.headline, in: header, x: 44, y: 11, w: 196, size: 13, weight: .semibold,
               color: summary.headlineColor)
-        label(summary.subline, in: header, x: 44, y: 30, w: 300, size: 11, color: .secondaryLabelColor)
+        label(summary.subline, in: header, x: 44, y: 30, w: 196, size: 11, color: .secondaryLabelColor)
 
         // Three quiet header controls with captions: keep awake, sounds, quit.
         func control(_ symbol: String, _ caption: String, x: CGFloat, key: String,
@@ -468,11 +445,11 @@ final class DashboardController: NSViewController {
             header.addSubview(button)
             focusButtons[key] = button
         }
-        let awakeNow = keepAwake && summary.working > 0
+        let awakeNow = keepAwake && sessions.contains { $0.needsKeepAwake }
         control(keepAwake ? "sun.max.fill" : "moon.zzz", keepAwake ? "Awake" : "May sleep", x: 252, key: "awake",
                 tip: !keepAwake ? "Your Mac may sleep while sessions work · click to keep it awake"
-                    : awakeNow ? "Keeping your Mac awake while sessions work · click to allow sleep"
-                    : "Will keep your Mac awake while sessions work · click to allow sleep",
+                    : awakeNow ? "Keeping your Mac and screen awake while sessions work · click to allow sleep"
+                    : "Will keep your Mac and screen awake while sessions work · click to allow sleep",
                 a11y: keepAwake ? "Keep awake on" : "Keep awake off") { [weak self] in self?.onKeepAwake?() }
         let muted = currentMuted
         control(muted ? "speaker.slash" : "speaker.wave.2", muted ? "Muted" : "Sounds", x: 300, key: "sound",
@@ -506,6 +483,20 @@ final class DashboardController: NSViewController {
     @objc func toggleSounds() { onMute?() }
     @objc func quitApp() { onQuit?() }
 
+    private func displayName(_ session: Session) -> String {
+        let duplicate = currentSessions.filter { $0.dirName == session.dirName }.count > 1
+        let parent = URL(fileURLWithPath: session.cwd).deletingLastPathComponent().lastPathComponent
+        let name = session.dirName.isEmpty ? session.id : session.dirName
+        return duplicate && !parent.isEmpty ? "\(parent)/\(name)" : name
+    }
+
+    private func accessibilityText(_ session: Session, now: TimeInterval = Date().timeIntervalSince1970) -> String {
+        let ask = session.state == .waiting ? ", \(waitingSummary(session.detail))" : ""
+        let canFocus = !session.tty.isEmpty && AppDelegate.focusableTerminals.contains(session.terminal)
+        let outcome = canFocus ? "Opens in \(session.terminal)." : "Copies the project path."
+        return "\(displayName(session)), \(session.provider.title) \(cleanModel(session.model)), \(clockText(session, now: now))\(ask). \(outcome)"
+    }
+
     private func row(_ session: Session, y: CGFloat, summary: ConsoleSummary) -> NSView {
         let canFocus = !session.tty.isEmpty && AppDelegate.focusableTerminals.contains(session.terminal)
         let card = SessionRow(canFocus ? "Open" : "Copy path") { [weak self] in
@@ -533,10 +524,7 @@ final class DashboardController: NSViewController {
                  : finished ? .finished : .idle
         card.addSubview(dot)
 
-        let duplicateName = currentSessions.filter { $0.dirName == session.dirName }.count > 1
-        let parent = URL(fileURLWithPath: session.cwd).deletingLastPathComponent().lastPathComponent
-        let baseName = session.dirName.isEmpty ? session.id : session.dirName
-        let name = duplicateName && !parent.isEmpty ? "\(parent)/\(baseName)" : baseName
+        let name = displayName(session)
         label(name, in: card, x: 24, y: 10, w: 226, size: 13, weight: .medium)
 
         let clock = label("", in: card, x: 250, y: 11, w: 114, size: 11,
@@ -556,9 +544,7 @@ final class DashboardController: NSViewController {
         glyph.contentTintColor = .secondaryLabelColor
         card.addSubview(glyph)
 
-        let ask = session.state == "waiting" ? ", \(waitingSummary(session.detail))" : ""
-        let outcome = canFocus ? "Opens in \(session.terminal)." : "Copies the project path."
-        card.setAccessibilityLabel("\(name), \(session.provider.title) \(model), \(clockText(session))\(ask). \(outcome)")
+        card.setAccessibilityLabel(accessibilityText(session))
         card.toolTip = tooltip(session)
         focusButtons[session.id] = card
         sessionRows[session.id] = card

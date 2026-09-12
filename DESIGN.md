@@ -17,7 +17,11 @@ otherwise. Mode: Operate. Native macOS conventions outrank expression.
   - Just finished: green for ten seconds, even while other sessions work.
   - Reduce Motion removes the flash; every state is still readable by shape and color.
 - Sound is a soft ping for a request and Glass for completion, never an error alert.
-  Sounds can be turned off with the speaker button in the console header.
+  Sounds can be turned off with the speaker button in the console header. Answered
+  requests cancel their pending sound. Standalone Codex permissions stay visual-only because
+  approval resolution is not separately observable through its hooks. Sessions
+  started with `codex-beacon` use live shared-server status to clear amber and
+  cancel answered alerts on the next refresh.
 
 ## One orange
 
@@ -38,8 +42,8 @@ caption beneath it in the Control Center idiom: Awake / May sleep, Sounds / Mute
 Quit. The caption states the current mode, the icon echoes it. The version rides on
 the quit tooltip. There is no branding and no menu.
 
-While any session is working the app keeps the Mac from idle sleep (the display may
-still sleep). The Awake button turns this off (sun when on, moon when sleep is
+While any session is working, or Codex is waiting within an active turn, the app
+keeps the Mac and display from idle sleep. The Awake button turns this off (sun when on, moon when sleep is
 allowed). Its tooltip says whether the lock is currently held. A full-width hairline
 closes the header; the same hairline, inset to the text edge, separates rows.
 
@@ -50,7 +54,7 @@ tabs and no section headings; each row states its own state.
 A row is 64 points and two lines. Line one: a state dot (filled orange, filled
 accent, filled green, or a hollow ring), the project name, and a verb clock on the
 right ("waiting 2m", "working 35m", "idle 2h 1m"). Line two: the provider and, for a
-waiting session, what it is asking for ("Needs permission for Bash", "Waiting for
+waiting session, what it is asking for ("Needs permission", "Waiting for
 your answer"); otherwise the model. Projects with the same folder name show their
 parent folder. The whole row is one button that opens the terminal or, for
 unsupported terminals, copies the path and says "Copied" in the clock. Hover shows

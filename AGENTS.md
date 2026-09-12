@@ -5,7 +5,12 @@
 ```
 Sources/
   CCBeaconCore/     Pure logic — models, formatters, session loading. No AppKit.
-    Core.swift      Session/DailyStats structs, loadSessions(), fmtElapsed(), etc.
+    Core.swift      Session model, formatters, process liveness
+    SessionPolicy.swift Typed state/event/outcome, notifications, beacon and row descriptors
+    SessionRepository.swift Session loading, synchronized cleanup, background SessionStore
+    TranscriptReader.swift Shared incremental JSONL transport with owned provider caches
+    ConsoleSummary.swift Pure header presentation
+    IntegrationInstaller.swift Shared hook installation with observable errors
     CodexTokens.swift Incremental Codex cumulative token adapter
     Version.swift   appVersion constant + isDevBuild detection (path-based)
   ccbeacon/         AppKit menu bar app
@@ -40,8 +45,9 @@ completion shows `systemGreen` for 10 seconds. Reduce Motion skips the flash.
 The console has no tabs. `ConsoleSummary` builds the header headline and subline
 from counts; `consoleOrder` (CCBeaconCore) sorts waiting (oldest first), then
 working (oldest first), then idle (newest first). Waiting rows show
-`waitingSummary(session.detail)`, which the hook records from the Notification
-message (Claude) or the tool name and command (Codex). Live refreshes never resize
+`waitingSummary(session.detail)`: only "Needs permission", "Waiting for your answer",
+or "Waiting for you". Hooks persist generic permission/input kinds, never raw commands
+or notification messages. Legacy details are sanitized before display. Live refreshes never resize
 the open window. The viewport is calculated once per opening from the row count,
 capped at 456 points of list (512 total). The next opening can resize.
 
@@ -49,7 +55,7 @@ capped at 456 points of list (512 total). The next opening can resize.
 which synchronizes `NSPopover.contentSize` before showing. AppKit caches this separately
 from the controller view size across closes; changing only the view leaves stale window
 chrome. Never set the root frame or preferred content size during a live refresh.
-`DashboardSurface` keeps permanent header, footer, scroll, clip, and document views;
+`DashboardSurface` keeps permanent header, scroll, clip, and document views;
 its layout derives from actual bounds. Update document contents without detaching the
 scroll hierarchy. Clamp restored offsets to both ends after focus restoration.
 The native CI checks exercise deferred layout, animated large/small/empty reopen cycles,
@@ -63,8 +69,8 @@ top right holds three captioned icon buttons (`HeaderIconButton`, image above a
 9-point caption): Awake/May sleep, Sounds/Muted, Quit (the version is the quit
 tooltip); there is no menu and no footer.
 
-**Keep awake:** `updateSleepAssertion(working:)` in AppDelegate holds an IOKit
-`PreventUserIdleSystemSleep` assertion while any session is working and `keepAwake`
+**Keep awake:** `updateSleepAssertion(working:)` in AppDelegate holds IOKit
+`PreventUserIdleSystemSleep` and `PreventUserIdleDisplaySleep` assertions while any session is working or a Codex session is waiting, and `keepAwake`
 (UserDefaults, default true) is on; it releases immediately otherwise. The
 dashboard mirrors the preference through `keepAwake` / `onKeepAwake`.
 See DESIGN.md for product intent and the responsibilities of each UI element.
@@ -89,6 +95,10 @@ run the normal application launch or modify Claude settings.
 ```sh
 swift run CCBeaconTests
 python3 Tests/Hooks/test_codex.py
+python3 Tests/Hooks/test_claude.py
+python3 Tests/Release/test_release.py
+python3 Tests/CodexRuntime/test_runtime.py # requires release build
+python3 Tests/CodexRuntime/test_launcher.py
 bash -n ccbeacon.sh
 ```
 
@@ -111,8 +121,10 @@ Notification (permission_prompt, elicitation_dialog) → waiting, Stop/StopFailu
 SessionEnd removes the file. `resume` is how a granted permission becomes "working"
 immediately: PreToolUse fires when the approved tool starts. Because it also fires
 for every other tool call, the shell exits before Python unless the session file
-currently says waiting. A repeated state keeps its `ts`, so clocks measure time in
-the current state.
+currently says waiting; the writer rechecks under the lock before resuming. A repeated
+state keeps its `ts`, so clocks measure time in the current state. Hooks persist
+`last_event`; only Stop is successful completion. Startup, StopFailure, and Interrupt
+never produce a completion sound or green tint.
 
 This lives in the app — NOT in the Homebrew formula — because `post_install` runs in
 Homebrew's sandbox with a fake `$HOME` and cannot write the user's real `~/.claude`.
@@ -129,13 +141,22 @@ make approval or continuation decisions.
 
 `loadAllSessions()` combines Claude and Codex directories. Codex IDs are namespaced,
 PID metadata uses `agent_pid`, and provider-specific transcript caches remain separate.
-Codex waiting state is driven by hooks, never transcript mtime. `Interrupt` suppresses
+Codex waiting state is driven by hooks or live shared-server status, never transcript mtime. `Interrupt` suppresses
 success sounds and the green completion tint. `CodexTokens.swift` treats token counts as cumulative
 and cached input as a subset of input. Its JSONL parser is best-effort because Codex
 transcripts are not a stable API. Session state must not depend on that parser.
 
 Python hook tests use temporary directories only. UI snapshots include mixed providers.
 Do not claim live Codex hook delivery until the user has trusted the installed hooks.
+
+`codex-beacon` delegates to the installed adapter's `launch-codex` mode, starts
+Codex's local App Server daemon and uses `--remote unix://...`. Ordinary `codex`
+is unchanged. `CodexRuntimeClient` polls loaded root threads with read-only
+`thread/read` calls on the SessionStore queue. It never subscribes to threads or
+responds to server requests. `CodexRuntimeOverlay` overrides matching hook state,
+preserves metadata and clocks, and falls back to hooks on disconnection. Live
+status permits delayed permission sounds; validation rechecks it before playback.
+`--codex-status` is a read-only diagnostic that skips application setup.
 
 ## Releasing a new version
 
@@ -150,7 +171,8 @@ Do not claim live Codex hook delivery until the user has trusted the installed h
 
 The release workflow (`.github/workflows/release.yml`) is triggered automatically once CI
 passes on the pushed commit. It will:
-- Detect the version tag on that commit
+- Check out the exact successful upstream main-push CI SHA, detect its version tag,
+  and verify that the tag and appVersion match the checkout
 - Extract the matching `## [X.Y.Z]` section from `CHANGELOG.md` as the release body
 - Build a universal (arm64 + x86_64) binary and attach `ccbeacon-vX.Y.Z-macos.tar.gz`
   (binary + hook script) to the GitHub release
@@ -175,9 +197,15 @@ git push
 ## Key implementation details
 
 - **False notification prevention:** `fcntl.flock(LOCK_EX)` in `ccbeacon.sh` serializes
-  concurrent hook processes so a `Notification` hook can't overwrite a `Stop` that ran
-  simultaneously. The app also debounces "waiting" state for 8 seconds and checks transcript
-  mtime before playing a sound.
+  concurrent hook processes using 64 persistent SHA-256 bucket locks under `.locks`.
+  Never unlink these locks. Both adapters share locking, atomic writes, and ancestry
+  discovery; provider event handling remains separate. Cleanup acquires the same lock
+  and compares the observed bytes before deleting, so a refreshed state survives.
+  The app also debounces "waiting" state for 8 seconds and checks transcript mtime
+  before playing a sound. Alert tickets remain cancellable through asynchronous validation.
+  Codex question answers correlate by `tool_use_id`; permission requests have no
+  approval-resolved event, so standalone permission signals are visual-only and keep-awake stays held
+  through the pending interval until the turn becomes idle or ends.
 
 - **Atomic state files:** the hook writes to `<session>.json.tmp` and `os.replace()`s it —
   the app reads without the lock, so the rename guarantees it never sees a half-written
@@ -193,7 +221,10 @@ git push
 
 - **Incremental transcript parsing:** `readTokens` caches a byte offset per transcript and
   parses only appended complete lines. Never re-read whole transcripts on the update tick —
-  they can be tens of MB and `update()` runs every second on the main thread.
+  they can be tens of MB. `SessionStore` coalesces refreshes on a serial background queue
+  and publishes snapshots to the main queue. UI actions consume that snapshot. Each
+  repository owns its caches; inode changes, shrinkage, and equal-size rewrites reset
+  parsing, and failed reads leave metadata uncommitted so the next refresh retries.
 
 - **Menu bar text color:** use dynamic system colors (`NSColor.labelColor`) for the status
   button text so it adapts to light and dark menu bars. Never hardcode white or snapshot a

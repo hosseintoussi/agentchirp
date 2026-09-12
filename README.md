@@ -27,7 +27,7 @@ Below is one list: sessions that need input first (longest waiting at the top), 
 working (longest running first), then idle. Each row shows a state dot, the project,
 a clock that says what the time means ("waiting 2m", "working 35m"), and on the second
 line the provider and, when the agent is waiting, what it is asking for ("Needs
-permission for Bash", "Waiting for your answer"). Projects with the same folder name
+permission", "Waiting for your answer"). Projects with the same folder name
 show their parent folder.
 
 Click anywhere on a row to open its terminal; hover for the full path and token usage.
@@ -37,7 +37,7 @@ session, Escape dismisses the popover. Live updates reorder the list in place wi
 resizing the open popover.
 
 While any session is working, ccbeacon keeps your Mac from going to sleep (the
-display can still sleep). Three captioned buttons sit at the top right: Awake turns
+display stays on). Three captioned buttons sit at the top right: Awake turns
 that off (it then reads May sleep), Sounds toggles sounds, Quit quits (hover it for
 the version).
 The console follows your Mac's light or dark appearance and Increase Contrast, and
@@ -125,6 +125,26 @@ an event's ccbeacon hook, your version wins.
 Codex sessions appear alongside Claude sessions, with a provider label, model, usage,
 and the same compact menu bar states. Tested against Codex CLI 0.154.0.
 
+For automatic clearing of amber as soon as an answer or approval is accepted,
+start new sessions with the optional `codex-beacon` launcher:
+
+```sh
+# Install the launcher from the repository or extracted release:
+install -m 755 codex-beacon ~/.local/bin/codex-beacon
+# Start ccbeacon once, then:
+codex-beacon
+# Or resume an existing conversation through the shared server:
+codex-beacon resume --last
+```
+
+Ensure `~/.local/bin` is on your PATH. The launcher starts Codex's local shared
+App Server automatically and connects the terminal to it. ccbeacon reads live
+thread status about once per second, clears amber when work resumes, and checks
+that a request remains unanswered before playing its delayed sound. It never
+answers approvals or questions. Ordinary `codex` and already-running standalone
+sessions continue using hooks. This optional integration uses the experimental
+App Server interface in Codex CLI 0.154.0.
+
 When a Codex home exists, ccbeacon installs its adapter at
 `~/.codex/hooks/ccbeacon.sh` and adds missing entries to `~/.codex/hooks.json`.
 It preserves existing hooks and does not change `config.toml`, approval policy,
@@ -138,12 +158,11 @@ installing ccbeacon alone does not approve them.
 The adapter observes session start/end, prompts, tool calls, permission requests,
 completion, and interruption. Supported input-question tool calls also appear as
 waiting. Completion plays the normal cue; interruption does not announce success.
-Approval state clears when the matching tool finishes or the turn stops. Other
+For standalone sessions, approval state clears when the matching tool finishes or the turn stops; permission prompts are visual-only because hooks cannot confirm when approval was granted. Other
 parallel tool completions do not clear outstanding approvals.
 
 Terminal jumps are available when a local iTerm2 or Terminal.app ancestor and TTY
-can be identified. A session without that information remains visible without a
-jump action. This integration does not attach to remote Codex servers or import
+can be identified. A session without that information remains visible; clicking its row copies the path. This integration does not attach to remote Codex servers or import
 historical sessions. Codex may keep a detached session open for up to 30 minutes
 before emitting SessionEnd.
 

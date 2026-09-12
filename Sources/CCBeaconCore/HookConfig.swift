@@ -17,13 +17,19 @@ private let desiredHooks: [(event: String, matcher: String?, state: String)] = [
 // An event that already has any ccbeacon entry is left exactly as the user configured
 // it; entries for other tools are never touched.
 public func mergedHookSettings(_ settings: [String: Any]) -> [String: Any]? {
+    guard settings["hooks"] == nil || settings["hooks"] is [String: Any] else { return nil }
     var hooks = settings["hooks"] as? [String: Any] ?? [:]
     var changed = false
 
     let events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop", "StopFailure", "SessionEnd"]
     for event in events {
+        guard hooks[event] == nil || hooks[event] is [[String: Any]] else { continue }
         var entries = hooks[event] as? [[String: Any]] ?? []
-        guard !entries.contains(where: { String(describing: $0).contains("ccbeacon") }) else { continue }
+        guard !entries.contains(where: { entry in
+            (entry["hooks"] as? [[String: Any]] ?? []).contains {
+                ($0["command"] as? String ?? "").contains("ccbeacon.sh")
+            }
+        }) else { continue }
         for d in desiredHooks where d.event == event {
             var entry: [String: Any] = ["hooks": [["type": "command", "command": "\(hookCommand) \(d.state)"]]]
             if let m = d.matcher { entry["matcher"] = m }
