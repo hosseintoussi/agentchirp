@@ -273,6 +273,78 @@ suite("loadSessions") {
     expect(loadSessions(dir: tmpRoot + "/does-not-exist").count, 0, "missing dir → empty")
 }
 
+suite("Codex integration") {
+    let fresh = mergedCodexHookSettings([:], home: "/tmp/codex")!
+    let hooks = fresh["hooks"] as! [String: Any]
+    expect(hooks.keys.sorted().joined(separator: ","),
+           "Interrupt,PermissionRequest,PostToolUse,PreToolUse,SessionEnd,SessionStart,Stop,UserPromptSubmit",
+           "Codex lifecycle event set")
+    expect(mergedCodexHookSettings(fresh, home: "/tmp/codex") == nil, true, "idempotent hook merge")
+    let existing: [String: Any] = ["description": "keep", "hooks": ["Stop": [["hooks": [["type": "command", "command": "custom ccbeacon.sh"]]]]]]
+    let merged = mergedCodexHookSettings(existing, home: "/tmp/codex")!
+    expect(merged["description"] as? String ?? "", "keep", "preserves top-level metadata")
+    let stop = (merged["hooks"] as! [String: Any])["Stop"] as! [[String: Any]]
+    expect(stop.count, 1, "preserves custom ccbeacon entry")
+    expect(mergedCodexHookSettings(["hooks": "invalid"], home: "/tmp") == nil, true, "does not overwrite malformed hooks")
+    let unrelated: [String: Any] = ["hooks": ["Stop": [["hooks": [["command": "other-tool"]]]]]]
+    let kept = mergedCodexHookSettings(unrelated, home: "/tmp")!["hooks"] as! [String: Any]
+    expect((kept["Stop"] as! [[String: Any]]).count, 2, "appends alongside unrelated hook")
+    let quoted = mergedCodexHookSettings([:], home: "/tmp/a b'c")!["hooks"] as! [String: Any]
+    let entry = (quoted["Stop"] as! [[String: Any]])[0]["hooks"] as! [[String: Any]]
+    expect((entry[0]["command"] as! String).contains("'\"'\"'"), true, "escapes apostrophes in custom home")
+
+    let dir = makeTmpDir("codex-tokens")
+    let path = dir + "/rollout.jsonl"
+    func count(_ input: Int, _ cached: Int, _ output: Int) -> String {
+        let obj: [String: Any] = ["type": "event_msg", "payload": ["type": "token_count", "info": ["total_token_usage":
+            ["input_tokens": input, "cached_input_tokens": cached, "output_tokens": output]]]]
+        return String(data: try! JSONSerialization.data(withJSONObject: obj), encoding: .utf8)! + "\n"
+    }
+    try! ("{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-test\"}}\n" + count(100, 60, 20) + count(100, 60, 20))
+        .write(toFile: path, atomically: true, encoding: .utf8)
+    var tokens = readCodexTokens(path)
+    expect(tokens.input, 40, "Codex input excludes cached tokens")
+    expect(tokens.cache, 60, "Codex cache is counted once")
+    expect(tokens.output, 20, "duplicate cumulative token records are not summed")
+    expect(tokens.model, "gpt-test", "model from turn context")
+    append(count(200, 100, 30), to: path)
+    tokens = readCodexTokens(path)
+    expect(tokens.input + tokens.cache + tokens.output, 230, "incremental cumulative totals")
+    let partial = count(300, 150, 40)
+    append(String(partial.dropLast()), to: path)
+    expect(readCodexTokens(path).output, 30, "partial Codex JSONL waits for newline")
+    append("\n", to: path)
+    expect(readCodexTokens(path).output, 40, "completed Codex record parsed")
+    try! count(10, 30, 2).write(toFile: path, atomically: true, encoding: .utf8)
+    tokens = readCodexTokens(path)
+    expect(tokens.input, 0, "cached input clamped to total input")
+    expect(tokens.output, 2, "replacement resets Codex cache")
+    expect(readCodexTokens("").input, 0, "missing transcript tolerated")
+
+    let claudeDir = makeTmpDir("mixed-claude"), codexDir = makeTmpDir("mixed-codex")
+    let now = Date().timeIntervalSince1970
+    writeSession(dir: claudeDir, id: "same", state: "working", ts: now, pid: Int(getpid()))
+    func writeCodex(_ state: String, pid: Int = Int(getpid()), event: String = "PermissionRequest") {
+        let obj: [String: Any] = ["session_id": "same", "state": state, "ts": now,
+            "agent_pid": pid, "transcript_path": path, "model": "gpt-fallback", "last_event": event]
+        try! JSONSerialization.data(withJSONObject: obj).write(to: URL(fileURLWithPath: codexDir + "/same.json"))
+    }
+    try! FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: now + 20)], ofItemAtPath: path)
+    writeCodex("waiting")
+    var sessions = loadAllSessions(claudeDir: claudeDir, codexDir: codexDir)
+    expect(sessions.map { $0.id }.joined(separator: ","), "codex:same,same", "provider IDs cannot collide; waiting sorted first")
+    expect(sessions[0].state, "waiting", "Codex transcript writes do not clear approval state")
+    expect(sessions[0].provider.rawValue, "codex", "Codex provider preserved")
+    expect(sessions[0].model, "gpt-fallback", "hook model is fallback without turn context")
+    writeCodex("done")
+    sessions = loadAllSessions(claudeDir: claudeDir, codexDir: codexDir)
+    expect(sessions.first { $0.provider == .codex }?.state ?? "missing", "idle", "finished Codex session remains open")
+    writeCodex("idle", event: "Interrupt")
+    expect(loadSessions(dir: codexDir, provider: .codex)[0].lastEvent, "Interrupt", "interruption remains distinguishable from completion")
+    writeCodex("working", pid: spawnDeadPid())
+    expect(loadSessions(dir: codexDir, provider: .codex).count, 0, "dead Codex processes removed")
+}
+
 try? FileManager.default.removeItem(atPath: tmpRoot)
 
 // MARK: - Summary

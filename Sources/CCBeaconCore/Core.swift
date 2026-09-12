@@ -4,6 +4,14 @@ import Darwin
 // MARK: - Paths
 
 public let sessionsDir  = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/cc-sessions")
+public let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex"
+public let codexSessionsDir = codexHome + "/ccbeacon/sessions"
+
+public enum AgentProvider: String {
+    case claude, codex
+    public var title: String { self == .claude ? "Claude" : "Codex" }
+}
+
 // MARK: - Token cache
 
 // Transcripts are append-only JSONL, so totals accumulate and `offset` tracks how many
@@ -91,15 +99,19 @@ public struct Session {
     public let model: String
     public let tty: String
     public let terminal: String
+    public let provider: AgentProvider
+    public let lastEvent: String
 
     public init(id: String, state: String, ts: TimeInterval, cwd: String, transcriptPath: String,
                 totalTokens: Int, inputTokens: Int, outputTokens: Int, cacheTokens: Int,
-                model: String, tty: String = "", terminal: String = "") {
+                model: String, tty: String = "", terminal: String = "",
+                provider: AgentProvider = .claude, lastEvent: String = "") {
         self.id = id; self.state = state; self.ts = ts; self.cwd = cwd
         self.transcriptPath = transcriptPath; self.totalTokens = totalTokens
         self.inputTokens = inputTokens; self.outputTokens = outputTokens
         self.cacheTokens = cacheTokens; self.model = model
         self.tty = tty; self.terminal = terminal
+        self.provider = provider; self.lastEvent = lastEvent
     }
 
     public var elapsed: Int { max(0, Int(Date().timeIntervalSince1970 - ts)) }
@@ -121,7 +133,7 @@ public struct Session {
 
 // MARK: - Loading
 
-public func loadSessions(dir: String = sessionsDir) -> [Session] {
+public func loadSessions(dir: String = sessionsDir, provider: AgentProvider = .claude) -> [Session] {
     let fm  = FileManager.default
     let now = Date().timeIntervalSince1970
     guard let files = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
@@ -142,7 +154,7 @@ public func loadSessions(dir: String = sessionsDir) -> [Session] {
         // that doesn't fire UserPromptSubmit). Use a 5-second buffer so the initial
         // transcript write that triggered the Notification doesn't false-positive.
         var state: String
-        if rawState == "waiting", !transcriptPath.isEmpty,
+        if provider == .claude, rawState == "waiting", !transcriptPath.isEmpty,
            let attrs = try? fm.attributesOfItem(atPath: transcriptPath),
            let mtime = attrs[.modificationDate] as? Date,
            mtime.timeIntervalSince1970 > ts + 5.0 {
@@ -151,7 +163,7 @@ public func loadSessions(dir: String = sessionsDir) -> [Session] {
             state = rawState
         }
 
-        let storedPid = json["claude_pid"] as? Int ?? 0
+        let storedPid = json[provider == .codex ? "agent_pid" : "claude_pid"] as? Int ?? 0
         // kill(pid, 0) returns ESRCH only when the process is truly gone (no permission needed).
         // A live PID can still belong to a *different* process after PID reuse: the real Claude
         // process always starts before its first hook write, so a start time after this
@@ -167,7 +179,7 @@ public func loadSessions(dir: String = sessionsDir) -> [Session] {
 
         // "done" means Claude finished its last response — the process may still be open.
         // Resolve to "idle" when the PID is alive so open sessions stay visible.
-        if state == "done" && storedPid > 0 && !pidDead {
+        if state == "done" && ((storedPid > 0 && !pidDead) || provider == .codex) {
             state = "idle"
         }
 
@@ -212,9 +224,9 @@ public func loadSessions(dir: String = sessionsDir) -> [Session] {
             return nil
         }
 
-        let tok = readTokens(transcriptPath)
+        let tok = provider == .codex ? readCodexTokens(transcriptPath) : readTokens(transcriptPath)
         return Session(
-            id:             json["session_id"]    as? String ?? file,
+            id:             (provider == .codex ? "codex:" : "") + (json["session_id"] as? String ?? file),
             state:          state,
             ts:             ts,
             cwd:            json["cwd"]           as? String ?? "",
@@ -223,19 +235,32 @@ public func loadSessions(dir: String = sessionsDir) -> [Session] {
             inputTokens:    tok.input,
             outputTokens:   tok.output,
             cacheTokens:    tok.cache,
-            model:          tok.model,
+            model:          tok.model.isEmpty ? (json["model"] as? String ?? "") : tok.model,
             tty:            json["tty"]           as? String ?? "",
-            terminal:       json["terminal"]      as? String ?? ""
+            terminal:       json["terminal"]      as? String ?? "",
+            provider:       provider,
+            lastEvent:      json["last_event"] as? String ?? ""
         )
     }
 
-    evictTokenCache(keeping: Set(sessions.map { $0.transcriptPath }))
+    let paths = Set(sessions.map { $0.transcriptPath })
+    if provider == .claude { evictTokenCache(keeping: paths) }
+    else { evictCodexTokenCache(keeping: paths) }
 
     // Secondary keys keep the order stable across rebuilds — Swift's sort is not
     // stable, and the menu is rebuilt every second.
     return sessions.sorted {
         if $0.priority != $1.priority { return $0.priority > $1.priority }
         if $0.ts       != $1.ts       { return $0.ts       > $1.ts }
+        return $0.id < $1.id
+    }
+}
+
+// Load each provider independently so transcript caches survive mixed-provider refreshes.
+public func loadAllSessions(claudeDir: String = sessionsDir, codexDir: String = codexSessionsDir) -> [Session] {
+    (loadSessions(dir: claudeDir) + loadSessions(dir: codexDir, provider: .codex)).sorted {
+        if $0.priority != $1.priority { return $0.priority > $1.priority }
+        if $0.ts != $1.ts { return $0.ts > $1.ts }
         return $0.id < $1.id
     }
 }

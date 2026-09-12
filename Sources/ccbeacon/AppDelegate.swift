@@ -4,7 +4,12 @@ import CCBeaconCore
 class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var statusItem: NSStatusItem!
     var timer: Timer?
-    var watcher: DispatchSourceFileSystemObject?
+    var attentionTimer: Timer?
+    var workingTimer: Timer?
+    private var workingDimmed = false
+    private var attentionOpacity: CGFloat = 1
+    private var attentionPhase: Double = 0
+    var watchers: [DispatchSourceFileSystemObject] = []
     var prevStates: [String: String] = [:]
     var pendingWaits: [String: DispatchWorkItem] = [:]
     var isMuted = UserDefaults.standard.bool(forKey: "muted")
@@ -13,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         syncClaudeIntegration()
+        syncCodexIntegration()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         popover.behavior = .transient
         popover.contentViewController = dashboard
@@ -27,7 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.image = BeaconMark.image(size: 18)
         statusItem.button?.imagePosition = .imageOnly
-        let initial = loadSessions()
+        let initial = loadAllSessions()
         prevStates = Dictionary(uniqueKeysWithValues: initial.map { ($0.id, $0.state) })
         watchSessionsDir()
         update()
@@ -42,22 +48,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: File watching
 
     func watchSessionsDir() {
-        try? FileManager.default.createDirectory(atPath: sessionsDir, withIntermediateDirectories: true)
-        let fd = open(sessionsDir, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write, .rename], queue: .main)
-        src.setEventHandler { [weak self] in self?.update() }
-        src.setCancelHandler { close(fd) }
-        src.resume()
-        watcher = src
-
+        for directory in [sessionsDir, codexSessionsDir] {
+            if directory == codexSessionsDir && !FileManager.default.fileExists(atPath: codexHome) { continue }
+            try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            let fd = open(directory, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd, eventMask: [.write, .rename], queue: .main)
+            source.setEventHandler { [weak self] in self?.update() }
+            source.setCancelHandler { close(fd) }
+            source.resume()
+            watchers.append(source)
+        }
     }
 
     // MARK: Update cycle
 
     func update() {
-        let sessions = loadSessions()
+        let sessions = loadAllSessions()
         fireNotifications(sessions)
         updateButton(sessions)
         if popover.isShown { dashboard.refresh(sessions, muted: isMuted) }
@@ -66,8 +74,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func togglePopover() {
         if popover.isShown { popover.performClose(nil); return }
         guard let button = statusItem.button else { return }
-        dashboard.refresh(loadSessions(), muted: isMuted)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        dashboard.show(in: popover, relativeTo: button, sessions: loadAllSessions(), muted: isMuted)
         popover.contentViewController?.view.window?.makeKey()
     }
 
@@ -85,8 +92,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self = self else { return }
                     self.pendingWaits.removeValue(forKey: sid)
-                    guard loadSessions().first(where: { $0.id == sid })?.state == "waiting" else { return }
-                    if !tpath.isEmpty,
+                    guard loadAllSessions().first(where: { $0.id == sid })?.state == "waiting" else { return }
+                    if session.provider == .claude, !tpath.isEmpty,
                        let attrs = try? FileManager.default.attributesOfItem(atPath: tpath),
                        let mtime = attrs[.modificationDate] as? Date,
                        Date().timeIntervalSince(mtime) < 5 { return }
@@ -96,7 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
             case "idle" where prev == "working" || prev == "waiting":
                 pendingWaits[session.id]?.cancel(); pendingWaits.removeValue(forKey: session.id)
-                playSound("Glass")
+                if session.lastEvent != "Interrupt" { playSound("Glass") }
             default:
                 if prev == "waiting" {
                     pendingWaits[session.id]?.cancel(); pendingWaits.removeValue(forKey: session.id)
@@ -121,26 +128,61 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         let waiting = sessions.filter { $0.state == "waiting" }.count
         let working = sessions.filter { $0.state == "working" }.count
-        let justFinished = sessions.contains { $0.state == "idle" && Date().timeIntervalSince1970 - $0.ts < 10 }
-        let symbol: String? = waiting > 0 ? "exclamationmark.circle" :
-                              working > 0 ? "circle.dotted" : justFinished ? "checkmark" : nil
-        let image = symbol.flatMap {
-            NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
-        } ?? BeaconMark.image(size: 18)
-        image.isTemplate = true
-        button.image = image
+        let justFinished = sessions.contains { $0.state == "idle" && ($0.provider == .claude || $0.lastEvent == "Stop") && Date().timeIntervalSince1970 - $0.ts < 10 }
+        // Keep the beacon and its width stable; only its tint communicates state.
+        // A nil idle tint lets macOS choose contrast for the menu bar appearance.
         button.title = ""
-        // Let the status bar choose its contrasting template color. Its appearance
-        // can differ from the app appearance, especially over dark wallpapers.
-        button.contentTintColor = waiting > 0 ? .systemOrange : nil
+        updateAttentionFlash(waiting: waiting > 0)
+        updateWorkingBlink(working: working > 0 && waiting == 0)
+        let color: NSColor? = waiting > 0 ? NSColor.systemOrange.withAlphaComponent(attentionOpacity) :
+                              working > 0 ? nil : justFinished ? .systemGreen : nil
+        button.contentTintColor = nil
+        button.image = BeaconMark.image(size: 18, color: color)
         let state = waiting > 0 ? "Needs input" : working > 0 ? "Working" : justFinished ? "Done" : "Idle"
         button.toolTip = "ccbeacon · \(state) · \(working) working · \(waiting) need input · \(sessions.count) sessions"
         button.setAccessibilityLabel(button.toolTip)
     }
 
+    private func updateWorkingBlink(working: Bool) {
+        guard working, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            workingTimer?.invalidate()
+            workingTimer = nil
+            workingDimmed = false
+            statusItem.button?.alphaValue = 1
+            return
+        }
+        guard workingTimer == nil else { return }
+        let blink = Timer(timeInterval: 1.4, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.workingDimmed.toggle()
+            self.statusItem.button?.alphaValue = self.workingDimmed ? 0.75 : 1
+        }
+        RunLoop.main.add(blink, forMode: .common)
+        workingTimer = blink
+    }
+
+    private func updateAttentionFlash(waiting: Bool) {
+        guard waiting, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            attentionTimer?.invalidate()
+            attentionTimer = nil
+            attentionOpacity = 1
+            attentionPhase = 0
+            return
+        }
+        guard attentionTimer == nil else { return }
+        let pulse = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.attentionPhase += (1.0 / 30.0) / 1.4 * 2 * .pi
+            self.attentionOpacity = CGFloat(0.35 + 0.65 * (1 + cos(self.attentionPhase)) / 2)
+            self.statusItem.button?.image = BeaconMark.image(size: 18,
+                color: NSColor.systemOrange.withAlphaComponent(self.attentionOpacity))
+        }
+        RunLoop.main.add(pulse, forMode: .common)
+        attentionTimer = pulse
+    }
+
     // Only these two can be focused by tty via AppleScript; rows for other terminals
-    // aren't clickable (see canFocus below) rather than guessing and activating the wrong app.
+    // offer Copy path instead of attempting to activate an unsupported app.
     static let focusableTerminals: Set<String> = ["iTerm2", "Terminal"]
 
     func canFocus(_ session: Session) -> Bool {
@@ -198,6 +240,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func toggleMute() {
         isMuted.toggle()
         UserDefaults.standard.set(isMuted, forKey: "muted")
-        dashboard.refresh(loadSessions(), muted: isMuted)
+        dashboard.refresh(loadAllSessions(), muted: isMuted)
     }
 }

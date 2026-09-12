@@ -16,4 +16,10 @@ jobs:
         run: swift build -c release
 
       - name: Test
-        run: swift run CCBeaconTests
+        run: |
+          swift run CCBeaconTests
+          bash -n ccbeacon.sh
+          python3 Tests/Hooks/test_codex.py
+
+      - name: Native UI and popover layout regressions
+        run: .build/release/ccbeacon --ui-check

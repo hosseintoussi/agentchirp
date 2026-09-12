@@ -6,6 +6,7 @@
 Sources/
   CCBeaconCore/     Pure logic — models, formatters, session loading. No AppKit.
     Core.swift      Session/DailyStats structs, loadSessions(), fmtElapsed(), etc.
+    CodexTokens.swift Incremental Codex cumulative token adapter
     Version.swift   appVersion constant + isDevBuild detection (path-based)
   ccbeacon/         AppKit menu bar app
     AppDelegate.swift  NSStatusItem, popover, notifications, file watching
@@ -14,7 +15,7 @@ Sources/
     main.swift         Entry point
 Tests/
   CCBeaconCoreTests/  Framework-free test runner (no XCTest needed)
-ccbeacon.sh           Claude Code hook script — writes session state files
+ccbeacon.sh           Claude/Codex hook adapters — writes provider-specific state files
 ```
 
 AppKit code lives only in `Sources/ccbeacon/`. Everything testable goes in `CCBeaconCore`.
@@ -23,13 +24,42 @@ AppKit code lives only in `Sources/ccbeacon/`. Everything testable goes in `CCBe
 
 ```sh
 swift build -c release
-.build/release/ccbeacon &       # runs as dev build — shows "dev" badge in console
+.build/release/ccbeacon &
 ```
 
-The menu bar button has a fixed square width with no text: a beacon at idle,
-a dotted activity circle while working, an amber exclamation circle when input is
-needed, and a checkmark for 10 seconds after completion. Counts live in the tooltip
-and console. Template images use the system tint (nil) except for the amber alert.
+The menu bar button keeps the same beacon at a fixed square width with no text.
+The neutral template blinks slowly while working, flashes amber when input is needed,
+and turns green for 10 seconds
+after completion. Active colors are drawn into non-template artwork; idle uses a
+template with system tint (nil) for light/dark menu bar contrast.
+Counts and explicit state labels live in the tooltip and console. The attention timer
+smoothly varies between full/35% opacity over 1.4 seconds and stops immediately when waiting clears.
+Working alternates full/75% button opacity every 1.4 seconds; waiting takes priority
+and resets button opacity. Reduce Motion keeps both signals steady.
+
+Needs input / Working / Idle are exclusive state tabs. Counts appear only in tabs;
+there is no summary strip, repeated group heading, or repeated row state. On opening,
+`prepareForPresentation` chooses needs input, then working, then idle. Waiting rows
+sort oldest first. Live refreshes never change selection or resize the open window.
+The viewport is calculated once per opening from the largest tab, capped at 420 points
+(and smaller screens). Overall maximum height is 548 points. The next opening can resize.
+
+**Popover sizing contract:** all real openings go through `DashboardController.show`,
+which synchronizes `NSPopover.contentSize` before showing. AppKit caches this separately
+from the controller view size across closes; changing only the view leaves stale window
+chrome. Never set the root frame or preferred content size during a live refresh.
+`DashboardSurface` keeps permanent header, footer, scroll, clip, and document views;
+its layout derives from actual bounds. Update document contents without detaching the
+scroll hierarchy. Clamp restored offsets to both ends after focus restoration.
+The native CI checks exercise deferred layout, animated large/small/empty reopen cycles,
+focused-row removal, scroll restoration, and constrained content bounds.
+
+Rows are fixed at 64 points, with path and token usage in tooltips. The whole row
+opens the terminal (or copies the path for unsupported terminals). Arrow keys navigate
+rows and Return activates them. There are no expandable rows. Tabs retain their scroll positions;
+provider/model or parent-directory context distinguishes similarly named sessions.
+See DESIGN.md for product intent and the responsibilities of each UI element.
+
 Clicking opens a transient NSPopover with DashboardController. Native buttons support keyboard
 navigation. State changes rebuild grouped rows, while clock/token ticks update labels in place.
 
@@ -48,6 +78,8 @@ run the normal application launch or modify Claude settings.
 
 ```sh
 swift run CCBeaconTests
+python3 Tests/Hooks/test_codex.py
+bash -n ccbeacon.sh
 ```
 
 No testing framework required — runs with Command Line Tools alone (no Xcode needed).
@@ -67,6 +99,25 @@ are never modified.
 This lives in the app — NOT in the Homebrew formula — because `post_install` runs in
 Homebrew's sandbox with a fake `$HOME` and cannot write the user's real `~/.claude`.
 Note: launching a dev build overwrites the user-installed hook with the repo version.
+
+## Codex integration
+
+`syncCodexIntegration()` installs the same bundled script under `$CODEX_HOME/hooks`
+and merges the Codex-specific hooks into `hooks.json`. Default home: `~/.codex`.
+Never write hook trust or approval settings; the user reviews definitions in `/hooks`.
+The bundled script takes `codex <state-directory>` for the Codex adapter, keeping
+existing release/Homebrew packaging intact. Hooks always return `{}` and never
+make approval or continuation decisions.
+
+`loadAllSessions()` combines Claude and Codex directories. Codex IDs are namespaced,
+PID metadata uses `agent_pid`, and provider-specific transcript caches remain separate.
+Codex waiting state is driven by hooks, never transcript mtime. `Interrupt` suppresses
+success sounds and the green completion tint. `CodexTokens.swift` treats token counts as cumulative
+and cached input as a subset of input. Its JSONL parser is best-effort because Codex
+transcripts are not a stable API. Session state must not depend on that parser.
+
+Python hook tests use temporary directories only. UI snapshots include mixed providers.
+Do not claim live Codex hook delivery until the user has trusted the installed hooks.
 
 ## Releasing a new version
 
@@ -133,6 +184,5 @@ git push
 - **Update timer runs in `.common` run-loop mode** — in `.default` mode timers stop firing
   during interaction.
 
-- **Dev detection:** `isDevBuild` checks `CommandLine.arguments[0]` — any path not under
-  `/opt/homebrew` or `/usr/local` is treated as a dev build and shows an orange "dev" badge
-  in the console header.
+- **Version display:** the app version sits beneath ccbeacon in the header. There is
+  no visible development badge.

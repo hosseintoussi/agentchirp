@@ -1,6 +1,6 @@
 # ccbeacon
 
-A macOS menu bar app that tells you when your Claude Code agents need attention — without you having to go look.
+A macOS menu bar app that tells you when your Claude Code and Codex agents need attention — without you having to go look.
 
 ## The problem
 
@@ -10,27 +10,36 @@ But you have no idea when it finishes. Or when it hits a decision point and is w
 
 ## What it does
 
-ccbeacon sits in your menu bar and watches all your active Claude Code sessions. You see exactly what's happening across every session, from any app, at a glance.
+ccbeacon sits in your menu bar and watches your active Claude Code and Codex sessions. You see exactly what's happening across every session, from any app, at a glance.
 
 | State | Menu bar |
 |-------|----------|
 | No active sessions | Beacon mark |
-| Sessions working | Dotted activity circle |
-| Needs your input | Amber exclamation circle |
-| Just finished | Checkmark for 10 seconds |
+| Sessions working | Slowly blinking beacon |
+| Needs your input | Flashing amber beacon |
+| Just finished | Green beacon for 10 seconds |
 
 The icon keeps a fixed width in every state; hover for status and session counts.
-Click the icon to open the session console. An attention summary leads into groups for
-sessions that need input, are working, or are idle. Each session shows its project,
-path, model, elapsed time, and input/output/cache token counts.
+Click the icon to open the session console. **Needs input / Working / Idle** tabs
+show each state and its count once. Opening the console selects Needs input first,
+then Working, then Idle. Sessions waiting longest appear first.
 
-Use **Open terminal** to jump to the matching pane in iTerm2 or Terminal.app. Other
-terminals remain visible without an unsupported jump action. Native buttons support
-keyboard navigation; Escape dismisses the popover. The session list scrolls while the
-summary and sound controls stay in place. Sound preferences persist between launches.
+Each two-line row identifies the project and provider and shows elapsed time. Click
+anywhere on the row to open its terminal; hover for the full path and token usage. Projects
+with the same folder name show their parent folder to help distinguish them.
 
-The console follows your Mac's light or dark appearance and uses a static beacon
-signal without continuous animation.
+Live updates move sessions into the correct tab without switching your selection
+or resizing the open popover. Rows have a fixed height and each tab remembers its
+scroll position. Close and reopen to jump to the highest-priority state.
+
+Terminal jumps support iTerm2 and Terminal.app. Unsupported terminals offer Copy path.
+Arrow keys navigate session rows and Return opens the selected session;
+Escape dismisses the popover. Sound preferences persist between launches. Quit lives
+in the header settings menu.
+
+The console follows your Mac's light or dark appearance. The neutral beacon blinks
+slowly while working; amber flashes faster when input is needed. Reduce Motion
+keeps both states steady.
 
 ---
 
@@ -109,9 +118,47 @@ an event's ccbeacon hook, your version wins.
 
 ---
 
+## Codex support
+
+Codex sessions appear alongside Claude sessions, with a provider label, model, usage,
+and the same compact menu bar states. Tested against Codex CLI 0.154.0.
+
+When a Codex home exists, ccbeacon installs its adapter at
+`~/.codex/hooks/ccbeacon.sh` and adds missing entries to `~/.codex/hooks.json`.
+It preserves existing hooks and does not change `config.toml`, approval policy,
+or hook trust. A custom `CODEX_HOME` is supported when ccbeacon is launched with
+that environment variable.
+
+**To activate:** restart Codex if needed, open `/hooks`, and review/trust the
+ccbeacon entries. Then start or resume a session. Codex skips untrusted hooks;
+installing ccbeacon alone does not approve them.
+
+The adapter observes session start/end, prompts, tool calls, permission requests,
+completion, and interruption. Supported input-question tool calls also appear as
+waiting. Completion plays the normal cue; interruption does not announce success.
+Approval state clears when the matching tool finishes or the turn stops. Other
+parallel tool completions do not clear outstanding approvals.
+
+Terminal jumps are available when a local iTerm2 or Terminal.app ancestor and TTY
+can be identified. A session without that information remains visible without a
+jump action. This integration does not attach to remote Codex servers or import
+historical sessions. Codex may keep a detached session open for up to 30 minutes
+before emitting SessionEnd.
+
+Usage is a best-effort adapter for local Codex JSONL transcripts. It reads only
+appended complete records and uses cumulative totals, splitting cached input out
+of the IN column so tokens are not counted twice. Missing or changed transcript
+formats do not affect hook-based lifecycle tracking.
+
+See [Codex hook documentation](https://learn.chatgpt.com/docs/hooks) for the
+supported events and required trust review.
+
+---
+
 ## How it works
 
-The hook script (`ccbeacon.sh`) is called by Claude Code on these events:
+The shared hook script (`ccbeacon.sh`) uses separate Claude and Codex adapters.
+Claude Code calls it on these events:
 
 | Hook | Matcher | State written |
 |------|---------|--------------|
@@ -135,4 +182,6 @@ A `flock`-based exclusive lock in the hook script prevents a race condition wher
 
 ## Security
 
-Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/cc-sessions/`. The app reads per-session token counts from your local transcript files. No data leaves your machine.
+Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/cc-sessions/`. The Codex adapter writes state under `$CODEX_HOME/ccbeacon/sessions` (default `~/.codex`).
+Both adapters retain session metadata, not prompt or tool content. The app reads
+per-session token counts from your local transcript files. No data leaves your machine.

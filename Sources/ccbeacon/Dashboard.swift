@@ -1,14 +1,83 @@
 import Cocoa
 import CCBeaconCore
 
+private let attentionColor = NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? .systemOrange : NSColor(red: 0.62, green: 0.32, blue: 0.02, alpha: 1)
+}
+
+private func neutralFill(_ opacity: CGFloat) -> NSColor {
+    NSColor(name: nil) { appearance in
+        (appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.white : NSColor.black).withAlphaComponent(opacity)
+    }
+}
+
 // All surfaces resolve colors while drawing so an open console follows appearance changes.
-final class Surface: NSView {
+class Surface: NSView {
     var tint: NSColor = .windowBackgroundColor
     var radius: CGFloat = 0
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         tint.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+    }
+}
+
+// The window owns the outer size. These permanent regions always lay out from
+// the actual bounds; session updates only change the document inside the list.
+final class DashboardSurface: Surface {
+    static let headerHeight: CGFloat = 92
+    static let footerHeight: CGFloat = 36
+    let header = Surface()
+    let footer = Surface()
+    let scroll = NSScrollView()
+    let document = Surface()
+    var documentHeight: CGFloat = 120
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        autoresizesSubviews = false
+        header.tint = .clear
+        footer.tint = .clear
+        document.tint = .clear
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.drawsBackground = false
+        scroll.horizontalScrollElasticity = .none
+        scroll.verticalScrollElasticity = .none
+        scroll.documentView = document
+        addSubview(header)
+        addSubview(scroll)
+        addSubview(footer)
+        layoutRegions()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutRegions()
+    }
+    override func layout() {
+        super.layout()
+        layoutRegions()
+    }
+    func layoutRegions() {
+        header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: Self.headerHeight)
+        let listHeight = max(0, bounds.height - Self.headerHeight - Self.footerHeight)
+        scroll.frame = NSRect(x: 0, y: Self.headerHeight, width: bounds.width, height: listHeight)
+        footer.frame = NSRect(x: 0, y: Self.headerHeight + listHeight,
+                              width: bounds.width, height: Self.footerHeight)
+        scroll.tile()
+        document.setFrameSize(NSSize(width: scroll.contentSize.width,
+                                     height: max(documentHeight, scroll.contentSize.height)))
+        restoreOffset(scroll.contentView.bounds.origin.y)
+    }
+    func restoreOffset(_ offset: CGFloat) {
+        let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, offset), maximum)))
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 }
 
@@ -30,17 +99,18 @@ final class BeaconMark: NSView {
             y: rect.minY + rect.height * 0.15, width: rect.width * 0.14,
             height: rect.height * 0.4), xRadius: 2, yRadius: 2).fill()
     }
-    static func image(size: CGFloat) -> NSImage {
+    static func image(size: CGFloat, color: NSColor? = nil) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            // A template is an opaque mask; AppKit supplies the menu bar color.
-            draw(in: rect, color: .black); return true
+            // Idle is a template mask; activity uses explicit artwork color because
+            // NSStatusBarButton does not reliably apply custom content tints.
+            draw(in: rect, color: color ?? .black); return true
         }
-        image.isTemplate = true
+        image.isTemplate = color == nil
         return image
     }
 }
 
-final class ActionButton: NSButton {
+class ActionButton: NSButton {
     var handler: (() -> Void)?
     init(_ title: String, symbol: String? = nil, action: @escaping () -> Void) {
         super.init(frame: .zero)
@@ -58,19 +128,116 @@ final class ActionButton: NSButton {
     @objc private func performAction() { handler?() }
 }
 
+// One native button owns the whole row, including keyboard activation and hover.
+final class SessionRow: ActionButton {
+    private var hovering = false
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder(); needsDisplay = true; return result
+    }
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder(); needsDisplay = true; return result
+    }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 { performClick(nil); return }
+        if event.keyCode == 125 || event.keyCode == 126,
+           let rows = superview?.subviews.compactMap({ $0 as? SessionRow }),
+           let index = rows.firstIndex(where: { $0 === self }) {
+            let next = min(max(0, index + (event.keyCode == 125 ? 1 : -1)), rows.count - 1)
+            window?.makeFirstResponder(rows[next])
+            rows[next].scrollToVisible(rows[next].bounds)
+            return
+        }
+        super.keyDown(with: event)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        if hovering || isHighlighted || window?.firstResponder === self {
+            neutralFill(isHighlighted ? 0.10 : 0.055).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 2), xRadius: 5, yRadius: 5).fill()
+        }
+    }
+}
+
+enum SessionTab: String, CaseIterable {
+    case needsInput = "Needs input", working = "Working", idle = "Idle"
+    func includes(_ session: Session) -> Bool {
+        switch self {
+        case .needsInput: return session.state == "waiting"
+        case .working: return session.state == "working"
+        case .idle: return session.state != "working" && session.state != "waiting"
+        }
+    }
+}
+
 final class DashboardController: NSViewController {
     let width: CGFloat = 400
-    let scroll = NSScrollView()
+    private var surface: DashboardSurface { view as! DashboardSurface }
+    var scroll: NSScrollView { surface.scroll }
     private var signature = ""
+    private var currentSessions: [Session] = []
+    private var currentMuted = false
+    private(set) var selectedTab: SessionTab = .working
+    private var tabOffsets: [SessionTab: CGFloat] = [:]
+    private var pendingOffset: CGFloat?
+    private var presentationListHeight: CGFloat?
+    private var presentationScreenHeight: CGFloat?
+    private var hasSelection = false
+
+    // Choose the most useful state on opening, then leave navigation under the
+    // user's control while live updates arrive. Pin the viewport for this opening.
+    func prepareForPresentation(_ sessions: [Session], muted: Bool, screenHeight: CGFloat? = nil) {
+        presentationScreenHeight = screenHeight
+        selectedTab = SessionTab.allCases.first { tab in sessions.contains(where: tab.includes) } ?? .needsInput
+        hasSelection = true
+        presentationListHeight = nil
+        pendingOffset = 0
+        signature = ""
+        refresh(sessions, muted: muted)
+    }
+
+    // Every presentation must update NSPopover.contentSize explicitly. AppKit
+    // caches it across closes; changing the controller view alone leaves stale chrome.
+    func show(in popover: NSPopover, relativeTo button: NSView,
+              sessions: [Session], muted: Bool) {
+        precondition(!popover.isShown, "Prepare a new size only while the popover is closed")
+        prepareForPresentation(sessions, muted: muted,
+                               screenHeight: button.window?.screen?.visibleFrame.height)
+        popover.contentViewController = self
+        popover.contentSize = view.frame.size
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
+    func selectTab(_ tab: SessionTab) {
+        guard tab != selectedTab else { return }
+        tabOffsets[selectedTab] = scroll.contentView.bounds.origin.y
+        selectedTab = tab
+        pendingOffset = tabOffsets[tab] ?? 0
+        signature = ""
+        refresh(currentSessions, muted: currentMuted)
+        if let button = focusButtons["tab:" + tab.rawValue] { view.window?.makeFirstResponder(button) }
+    }
+    private let sessionRowHeight: CGFloat = 64
     private var timeLabels: [String: NSTextField] = [:]
-    private var tokenLabels: [String: NSTextField] = [:]
+    private var sessionRows: [String: SessionRow] = [:]
     private var focusButtons: [String: NSButton] = [:]
     var onFocus: ((Session) -> Void)?
     var onMute: (() -> Void)?
     var onQuit: (() -> Void)?
 
     override func loadView() {
-        view = Surface(frame: NSRect(x: 0, y: 0, width: width, height: 460))
+        view = DashboardSurface(frame: NSRect(x: 0, y: 0, width: width, height: 248))
     }
 
     @discardableResult
@@ -89,144 +256,198 @@ final class DashboardController: NSViewController {
 
     func refresh(_ sessions: [Session], muted: Bool) {
         _ = view
+        if !hasSelection {
+            selectedTab = SessionTab.allCases.first { tab in sessions.contains(where: tab.includes) } ?? .needsInput
+            hasSelection = true
+        }
+        if presentationListHeight == nil {
+            let largestTabCount = SessionTab.allCases.map { tab in sessions.filter { tab.includes($0) }.count }.max() ?? 0
+            let screenHeight = presentationScreenHeight ?? NSScreen.main?.visibleFrame.height ?? 700
+            // Reserve the fixed header/footer plus 66 points for popover chrome
+            // and screen-edge clearance. Use the status item's screen on opening.
+            let screenBudget = max(0, screenHeight - DashboardSurface.headerHeight
+                - DashboardSurface.footerHeight - 66)
+            presentationListHeight = min(max(120, CGFloat(largestTabCount) * sessionRowHeight + 8),
+                                         420, screenBudget)
+            view.setFrameSize(NSSize(width: width, height: DashboardSurface.headerHeight
+                + presentationListHeight! + DashboardSurface.footerHeight))
+        }
+        currentSessions = sessions; currentMuted = muted
         // Token and clock updates never replace focused controls or move the scroll position.
         let next = sessions.map {
-            "\($0.id)|\($0.state)|\($0.cwd)|\($0.model)|\($0.tty)|\($0.terminal)"
+            "\($0.provider.rawValue)|\($0.id)|\($0.state)|\($0.cwd)|\($0.model)|\($0.tty)|\($0.terminal)"
         }.joined(separator: "\n") + "\(muted)"
         if next != signature {
             signature = next
             rebuild(sessions, muted: muted)
         }
         for session in sessions {
-            timeLabels[session.id]?.stringValue = session.state == "idle" ? "Idle" : fmtElapsed(session.elapsed)
-            tokenLabels[session.id]?.stringValue = session.totalTokens == 0 ? "Usage appears as Claude works" :
-                "IN \(fmtK(session.inputTokens))   OUT \(fmtK(session.outputTokens))   CACHE \(fmtK(session.cacheTokens))"
+            timeLabels[session.id]?.stringValue = fmtElapsed(session.elapsed)
+            let usage = session.totalTokens == 0 ? "" :
+                "\nIN \(fmtK(session.inputTokens)) · OUT \(fmtK(session.outputTokens)) · CACHE \(fmtK(session.cacheTokens))"
+            let action = AppDelegate.focusableTerminals.contains(session.terminal) && !session.tty.isEmpty
+                ? "Open in \(session.terminal)" : "Copy project path · Terminal link unavailable"
+            sessionRows[session.id]?.toolTip = "\(action)\n\(session.cwd)\(usage)"
         }
     }
 
-    private func rebuild(_ sessions: [Session], muted: Bool) {
-        let oldOffset = scroll.contentView.bounds.origin
+    private func rebuild(_ allSessions: [Session], muted: Bool) {
+        let sessions = allSessions.filter { selectedTab.includes($0) }.sorted {
+            if $0.ts != $1.ts { return selectedTab == .needsInput ? $0.ts < $1.ts : $0.ts > $1.ts }
+            return $0.id < $1.id
+        }
+        let oldOffset = NSPoint(x: 0, y: pendingOffset ?? scroll.contentView.bounds.origin.y)
+        pendingOffset = nil
         let focusedID = focusButtons.first { $0.value === view.window?.firstResponder }?.key
-        view.subviews.forEach { $0.removeFromSuperview() }
-        timeLabels.removeAll(); tokenLabels.removeAll(); focusButtons.removeAll()
-        let waiting = sessions.filter { $0.state == "waiting" }
-        let working = sessions.filter { $0.state == "working" }
-        let idle = sessions.filter { $0.state != "waiting" && $0.state != "working" }
-        let groups = [("NEEDS INPUT", waiting), ("WORKING", working), ("IDLE", idle)].filter { !$0.1.isEmpty }
-        let contentHeight = sessions.isEmpty ? CGFloat(192) : CGFloat(sessions.count * 116 + groups.count * 28 + 8)
-        let visibleHeight = min(contentHeight, 440)
-        let height = 198 + visibleHeight + 54
-        view.setFrameSize(NSSize(width: width, height: height))
-        preferredContentSize = view.frame.size
+        // Never detach the scroll view or replace its clip/document view during
+        // interaction. In-flight scrolling and focus remain attached to one hierarchy.
+        surface.header.subviews.forEach { $0.removeFromSuperview() }
+        surface.footer.subviews.forEach { $0.removeFromSuperview() }
+        surface.document.subviews.forEach { $0.removeFromSuperview() }
+        timeLabels.removeAll(); sessionRows.removeAll(); focusButtons.removeAll()
+        surface.documentHeight = sessions.isEmpty ? 120 : CGFloat(sessions.count) * sessionRowHeight + 8
+        surface.layoutRegions()
+        let header = surface.header
+        let footer = surface.footer
+        let document = surface.document
 
-        let mark = BeaconMark(frame: NSRect(x: 23, y: 17, width: 27, height: 27))
-        view.addSubview(mark)
-        label("ccbeacon", in: view, x: 61, y: 20, w: 160, size: 16, weight: .semibold)
-        label(isDevBuild ? "LOCAL / DEV" : "LOCAL", in: view, x: 293, y: 25, w: 84,
-              size: 9, weight: .medium, color: .secondaryLabelColor, mono: true).alignment = .right
+        let mark = BeaconMark(frame: NSRect(x: 20, y: 17, width: 21, height: 21))
+        header.addSubview(mark)
+        label("ccbeacon", in: header, x: 51, y: 12, w: 160, size: 13, weight: .semibold)
+        label("v\(appVersion)", in: header, x: 51, y: 30, w: 160,
+              size: 10, color: .secondaryLabelColor)
 
-        let summary = Surface(frame: NSRect(x: 20, y: 66, width: 360, height: 113))
-        summary.radius = 14
-        summary.tint = waiting.isEmpty ? NSColor.controlAccentColor.withAlphaComponent(0.07) : NSColor.systemOrange.withAlphaComponent(0.10)
-        view.addSubview(summary)
-        let headline = !waiting.isEmpty ? "\(waiting.count) \(waiting.count == 1 ? "session needs" : "sessions need") you" :
-                       !working.isEmpty ? "Claude is on it" : sessions.isEmpty ? "Ready when you are" : "All quiet for now"
-        label(headline, in: summary, x: 16, y: 15, w: 328, size: 23, weight: .semibold)
-        let subtitle = !waiting.isEmpty ? "Open a terminal to keep things moving." :
-                       !working.isEmpty ? "Keep your focus. Listen for the next cue." :
-                       sessions.isEmpty ? "Your Claude Code sessions will appear here." : "Your sessions are idle. Pick up where you left off."
-        label(subtitle, in: summary, x: 16, y: 49, w: 330, size: 11, color: .secondaryLabelColor)
-        label("\(working.count) working    ·    \(waiting.count) need input    ·    \(idle.count) idle", in: summary,
-              x: 16, y: 80, w: 328, size: 11, weight: .medium, mono: true)
+        let settings = ActionButton("", symbol: "ellipsis.circle") { [weak self] in self?.showSettings() }
+        settings.frame = NSRect(x: 350, y: 14, width: 28, height: 26)
+        settings.isBordered = false
+        settings.setAccessibilityLabel("Settings")
+        settings.toolTip = "Settings"
+        header.addSubview(settings)
+        focusButtons["settings"] = settings
 
-        scroll.frame = NSRect(x: 0, y: 198, width: width, height: visibleHeight)
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = false
-        scroll.horizontalScrollElasticity = .none
-        let document = Surface(frame: NSRect(x: 0, y: 0, width: width, height: contentHeight))
-        document.tint = .clear
-        scroll.documentView = document
-        view.addSubview(scroll)
-        var y: CGFloat = 0
-        for (title, group) in groups {
-            label(title, in: document, x: 24, y: y + 3, w: 280, size: 9, weight: .semibold,
-                  color: .secondaryLabelColor)
-            label(String(group.count), in: document, x: 344, y: y + 3, w: 30, size: 10,
-                  color: .secondaryLabelColor, mono: true).alignment = .right
-            y += 24
-            for session in group {
-                document.addSubview(row(session, y: y))
-                y += 116
+        // Only the selected segment has a background; the shared surface stays clear.
+        for (index, tab) in SessionTab.allCases.enumerated() {
+            let matches = allSessions.filter { tab.includes($0) }
+            let selected = selectedTab == tab
+            let button = ActionButton("\(tab.rawValue)  \(matches.count)") { [weak self] in self?.selectTab(tab) }
+            button.isBordered = false
+            button.focusRingType = .none
+            button.frame = NSRect(x: 16 + CGFloat(index) * 124, y: 54, width: 120, height: 28)
+            if selected {
+                let selection = Surface(frame: button.frame)
+                selection.radius = 6
+                selection.tint = neutralFill(0.065)
+                header.addSubview(selection)
             }
-            y += 4
+            button.font = .systemFont(ofSize: 12, weight: selected ? .semibold : .regular)
+            let title = NSMutableAttributedString(string: button.title, attributes: [
+                .font: button.font!,
+                .foregroundColor: tab == .needsInput && !matches.isEmpty ? attentionColor : NSColor.labelColor
+            ])
+            title.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
+                range: (button.title as NSString).range(of: "  \(matches.count)", options: .backwards))
+            button.attributedTitle = title
+            button.setAccessibilityLabel("\(tab.rawValue), \(matches.count) sessions\(selected ? ", selected" : "")")
+            button.toolTip = "Show \(tab.rawValue.lowercased()) sessions"
+            header.addSubview(button); focusButtons["tab:" + tab.rawValue] = button
+        }
+
+        var y: CGFloat = 4
+        for session in sessions {
+            document.addSubview(row(session, y: y))
+            y += sessionRowHeight
+            if session.id != sessions.last?.id {
+                let separator = Surface(frame: NSRect(x: 28, y: y - 0.5, width: 344, height: 0.5))
+                separator.tint = neutralFill(0.09)
+                document.addSubview(separator)
+            }
         }
         if sessions.isEmpty {
-            label("Start with a terminal", in: document, x: 28, y: 22, w: 340, size: 16, weight: .medium)
-            label("Open a project, then run Claude Code.", in: document, x: 28, y: 51, w: 340,
-                  color: .secondaryLabelColor)
-            let command = Surface(frame: NSRect(x: 28, y: 82, width: 344, height: 42))
-            command.radius = 8; command.tint = .labelColor.withAlphaComponent(0.045)
-            document.addSubview(command)
-            label("›  claude", in: command, x: 14, y: 11, w: 310, size: 13, weight: .medium, mono: true)
-            label("Already running? Start a new session to connect.", in: document,
-                  x: 28, y: 144, w: 344, size: 11, color: .secondaryLabelColor)
+            let title: String
+            let detail: String
+            if allSessions.isEmpty {
+                title = "Ready when you are"
+                detail = "Start a task in Claude Code or Codex."
+            } else {
+                switch selectedTab {
+                case .needsInput:
+                    title = "All caught up"
+                    detail = "Sessions that need your input will appear here."
+                case .working:
+                    title = "Nothing running"
+                    detail = "Start a task in Claude Code or Codex."
+                case .idle:
+                    title = "No idle sessions"
+                    detail = "Sessions appear here when their work stops."
+                }
+            }
+            label(title, in: document, x: 28, y: 26, w: 344, size: 13, weight: .medium)
+            label(detail, in: document, x: 28, y: 49, w: 344, size: 12, color: .secondaryLabelColor)
         }
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(oldOffset.y, max(0, contentHeight - visibleHeight))))
-        scroll.reflectScrolledClipView(scroll.contentView)
 
-        let footerY = height - 54
-        let line = Surface(frame: NSRect(x: 20, y: footerY, width: 360, height: 1))
-        line.tint = .separatorColor; view.addSubview(line)
         let sound = ActionButton(muted ? "Sound off" : "Sound on", symbol: muted ? "speaker.slash" : "speaker.wave.2") { [weak self] in self?.onMute?() }
-        sound.frame = NSRect(x: 18, y: footerY + 15, width: 106, height: 25)
+        sound.frame = NSRect(x: 19, y: 4, width: 96, height: 24)
+        sound.isBordered = false
+        sound.contentTintColor = .secondaryLabelColor
+        sound.attributedTitle = NSAttributedString(string: sound.title, attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor
+        ])
         sound.toolTip = muted ? "Enable session sounds" : "Mute session sounds"
-        view.addSubview(sound)
-        label("v\(appVersion)", in: view, x: 151, y: footerY + 20, w: 110, size: 10, color: .secondaryLabelColor).alignment = .center
-        let quit = ActionButton("Quit") { [weak self] in self?.onQuit?() }
-        quit.frame = NSRect(x: 322, y: footerY + 15, width: 60, height: 25)
-        quit.keyEquivalent = "q"
-        view.addSubview(quit)
-        if let focusedID, let button = focusButtons[focusedID] { view.window?.makeFirstResponder(button) }
+        footer.addSubview(sound)
+        focusButtons["sound"] = sound
+        if let focusedID {
+            let replacement = focusButtons[focusedID] ?? focusButtons["tab:" + selectedTab.rawValue]
+            view.window?.makeFirstResponder(replacement)
+        }
+        surface.restoreOffset(oldOffset.y)
     }
 
+    func settingsMenu() -> NSMenu {
+        let menu = NSMenu()
+        let quit = NSMenuItem(title: "Quit ccbeacon", action: #selector(quitApp), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+        return menu
+    }
+
+    private func showSettings() {
+        guard let button = focusButtons["settings"] else { return }
+        settingsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 3), in: button)
+    }
+
+    @objc func quitApp() { onQuit?() }
+
     private func row(_ session: Session, y: CGFloat) -> NSView {
-        let waiting = session.state == "waiting"
-        let working = session.state == "working"
-        let card = Surface(frame: NSRect(x: 20, y: y, width: 360, height: 106))
-        card.radius = 11
-        card.tint = .labelColor.withAlphaComponent(0.035)
-        let amber = NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? .systemOrange : NSColor(red: 0.62, green: 0.32, blue: 0.02, alpha: 1)
-        }
-        let accent: NSColor = waiting ? amber : working ? .controlAccentColor : .secondaryLabelColor
-        let dot = Surface(frame: NSRect(x: 14, y: 21, width: 6, height: 6))
-        dot.radius = 3; dot.tint = accent; card.addSubview(dot)
-        let name = session.dirName.isEmpty ? session.id : session.dirName
-        label(name, in: card, x: 28, y: 13, w: 234, size: 14, weight: .semibold)
-        let clock = label("", in: card, x: 264, y: 16, w: 80, size: 11, color: accent, mono: true)
-        clock.alignment = .right; timeLabels[session.id] = clock
-        let path = label(session.cwd.replacingOccurrences(of: NSHomeDirectory(), with: "~"),
-                         in: card, x: 28, y: 36, w: 316, size: 10, color: .secondaryLabelColor)
-        path.lineBreakMode = .byTruncatingMiddle
-        path.toolTip = session.cwd
-        let model = cleanModel(session.model)
-        label(model.isEmpty ? "Claude Code" : model, in: card, x: 28, y: 60, w: 190,
-              size: 11, weight: .medium, color: .secondaryLabelColor)
-        let tokens = label("", in: card, x: 28, y: 83, w: 316, size: 9, color: .secondaryLabelColor, mono: true)
-        tokenLabels[session.id] = tokens
         let canFocus = !session.tty.isEmpty && AppDelegate.focusableTerminals.contains(session.terminal)
-        if canFocus {
-            let open = ActionButton("Open terminal", symbol: "arrow.up.right") { [weak self] in self?.onFocus?(session) }
-            open.frame = NSRect(x: 225, y: 56, width: 122, height: 25)
-            open.setAccessibilityLabel("Open \(name) in \(session.terminal)")
-            open.toolTip = "\(session.terminal) · \(session.tty)"
-            card.addSubview(open); focusButtons[session.id] = open
-        } else {
-            label(session.terminal.isEmpty ? "No terminal link" : session.terminal, in: card,
-                  x: 222, y: 61, w: 122, size: 10, color: .secondaryLabelColor).alignment = .right
+        let card = SessionRow(canFocus ? "Open" : "Copy path") { [weak self] in
+            if canFocus { self?.onFocus?(session) }
+            else {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.cwd, forType: .string)
+            }
         }
+        card.isBordered = false
+        card.focusRingType = .none
+        card.frame = NSRect(x: 16, y: y, width: 368, height: sessionRowHeight)
+        card.identifier = NSUserInterfaceItemIdentifier(session.id)
+        let name = session.dirName.isEmpty ? session.id : session.dirName
+        label(name, in: card, x: 12, y: 10, w: 250, size: 13, weight: .medium)
+        let clock = label("", in: card, x: 276, y: 11, w: 80, size: 11,
+                          color: session.state == "waiting" ? attentionColor : .secondaryLabelColor, mono: true)
+        clock.alignment = .right
+        timeLabels[session.id] = clock
+        let model = cleanModel(session.model)
+        let duplicateName = currentSessions.filter { $0.dirName == session.dirName }.count > 1
+        let context = duplicateName ? URL(fileURLWithPath: session.cwd).deletingLastPathComponent().lastPathComponent : model
+        let providerModel = context.isEmpty ? session.provider.title : "\(session.provider.title) · \(context)"
+        label(providerModel, in: card, x: 12, y: 33, w: 308, size: 12, color: .secondaryLabelColor)
+        let arrow = NSImageView(frame: NSRect(x: 340, y: 34, width: 12, height: 12))
+        arrow.image = NSImage(systemSymbolName: canFocus ? "arrow.up.right" : "doc.on.doc", accessibilityDescription: nil)
+        arrow.contentTintColor = .tertiaryLabelColor
+        card.addSubview(arrow)
+        card.setAccessibilityLabel("\(canFocus ? "Open" : "Copy path for") \(name), \(providerModel)")
+        focusButtons[session.id] = card
+        sessionRows[session.id] = card
         return card
     }
 }

@@ -1,4 +1,147 @@
 #!/usr/bin/env bash
+# Codex uses the same bundled script with a separate provider adapter. Always emit
+# an empty JSON result so hooks never change approval or continuation decisions.
+if [ "${1:-}" = "codex" ]; then
+  shift
+  exec python3 -c 'import fcntl
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+
+def process_info():
+    # Only the actual ancestor chain can identify this terminal. Do not guess from
+    # another Codex window or bind a desktop session to an arbitrary open terminal.
+    try:
+        out = subprocess.check_output(["/bin/ps", "-axo", "pid=,ppid=,tty=,comm="],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=1)
+    except Exception:
+        return 0, "", ""
+    table = {}
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) == 4:
+            table[int(parts[0])] = (int(parts[1]), parts[2], parts[3])
+    pid, agent, terminal, device = os.getppid(), 0, "", ""
+    seen = set()
+    while pid > 1 and pid in table and pid not in seen:
+        seen.add(pid)
+        parent, tty, command = table[pid]
+        base = os.path.basename(command).lower()
+        if not agent and (base == "codex" or base.startswith("codex-")):
+            agent = pid
+            if tty.startswith("ttys"):
+                device = "/dev/" + tty
+        if base == "iterm2":
+            terminal = "iTerm2"
+        elif base == "terminal":
+            terminal = "Terminal"
+        pid = parent
+    return agent, terminal, device
+
+
+def record():
+    hook = json.load(sys.stdin)
+    sid = hook.get("session_id", "")
+    if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", sid):
+        return
+    event = hook.get("hook_event_name", "")
+    states = {"SessionStart": "idle", "UserPromptSubmit": "working",
+              "PreToolUse": "working", "PostToolUse": "working",
+              "PermissionRequest": "waiting", "Stop": "done", "Interrupt": "idle"}
+    if event not in states and event != "SessionEnd":
+        return
+    transcript = hook.get("transcript_path") or ""
+    # Subagent hooks can report their parent'"'"'s session id. Ignore a child
+    # transcript rather than letting its Stop mark the parent finished.
+    if transcript:
+        try:
+            with open(transcript) as f:
+                first = json.loads(f.readline(65536))
+            if first.get("type") == "session_meta":
+                meta = first.get("payload", {})
+                if meta.get("id") and meta["id"] != sid:
+                    return
+                if isinstance(meta.get("source"), dict) and "subagent" in meta["source"]:
+                    return
+        except (OSError, ValueError):
+            pass
+    directory = sys.argv[1]
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    path = os.path.join(directory, sid + ".json")
+    # Keep locks separate from state files: unlinking a lock lets queued writers
+    # lock different inodes and breaks serialization. These tiny files are reusable.
+    locks = os.path.join(directory, ".locks")
+    os.makedirs(locks, mode=0o700, exist_ok=True)
+    lock_path = os.path.join(locks, str(int(hashlib.sha256(sid.encode()).hexdigest(), 16) % 64))
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(path) as f:
+                previous = json.load(f)
+        except (OSError, ValueError):
+            previous = {}
+        if event == "SessionEnd":
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            return
+        turn = hook.get("turn_id") or previous.get("turn_id", "")
+        previous_turn = previous.get("turn_id", "")
+        if event not in ("SessionStart", "UserPromptSubmit"):
+            if previous_turn and turn and turn != previous_turn:
+                return
+            if previous.get("last_event") in ("Stop", "Interrupt") and turn == previous_turn:
+                return
+        if event == "SessionStart" and previous.get("state") in ("working", "waiting"):
+            return
+        state = states[event]
+        pending = previous.get("pending_tools", []) if turn == previous_turn else []
+        tool = hook.get("tool_name", "")
+        tool_input = hook.get("tool_input")
+        # Approval events can add a description absent from PostToolUse. Bash and
+        # patch calls correlate on the actual command, not that approval-only text.
+        if isinstance(tool_input, dict) and "command" in tool_input:
+            tool_input = {"command": tool_input["command"]}
+        tool_key = hashlib.sha256(json.dumps([tool, tool_input], sort_keys=True).encode()).hexdigest()
+        if event == "PermissionRequest" or (event == "PreToolUse" and tool.split("__")[-1].split(".")[-1] == "request_user_input"):
+            if tool_key not in pending:
+                pending.append(tool_key)
+        elif event == "PostToolUse":
+            pending = [key for key in pending if key != tool_key]
+        elif event in ("Stop", "Interrupt", "UserPromptSubmit", "SessionStart"):
+            pending = []
+        if pending:
+            state = "waiting"
+        now = time.time()
+        ts = previous.get("ts", now) if previous.get("state") == state and turn == previous_turn else now
+        # Re-evaluate ancestry each event: a resumed session may have moved terminals.
+        agent, terminal, tty = process_info()
+        data = {"provider": "codex", "session_id": sid, "state": state, "ts": ts,
+                "turn_id": turn, "last_event": event, "pending_tools": pending,
+                "cwd": hook.get("cwd") or previous.get("cwd", ""),
+                "transcript_path": transcript, "model": hook.get("model") or previous.get("model", ""),
+                "agent_pid": agent, "terminal": terminal, "tty": tty}
+        temporary = path + ".tmp"
+        with open(temporary, "w") as f:
+            json.dump(data, f)
+        os.replace(temporary, path)
+
+
+try:
+    record()
+except Exception:
+    # Monitoring must not block the agent or add text to its prompt.
+    pass
+print("{}")
+' "${1:-${CODEX_HOME:-$HOME/.codex}/ccbeacon/sessions}"
+fi
+
 # Reflect Claude Code state: iTerm2 tab color + session state file.
 state="${1:-}"
 TTY=/dev/tty
