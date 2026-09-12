@@ -109,21 +109,29 @@ def record():
         if isinstance(tool_input, dict) and "command" in tool_input:
             tool_input = {"command": tool_input["command"]}
         tool_key = hashlib.sha256(json.dumps([tool, tool_input], sort_keys=True).encode()).hexdigest()
+        # The console shows what the agent is waiting for: the tool and, for shell
+        # calls, the command itself (trimmed so the state file stays small).
+        detail = previous.get("detail", "") if turn == previous_turn else ""
         if event == "PermissionRequest" or (event == "PreToolUse" and tool.split("__")[-1].split(".")[-1] == "request_user_input"):
             if tool_key not in pending:
                 pending.append(tool_key)
+            command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            command = " ".join(str(command).split())[:120]
+            detail = f"{tool}: {command}" if command else (tool or "")
         elif event == "PostToolUse":
             pending = [key for key in pending if key != tool_key]
         elif event in ("Stop", "Interrupt", "UserPromptSubmit", "SessionStart"):
             pending = []
         if pending:
             state = "waiting"
+        else:
+            detail = ""
         now = time.time()
         ts = previous.get("ts", now) if previous.get("state") == state and turn == previous_turn else now
         # Re-evaluate ancestry each event: a resumed session may have moved terminals.
         agent, terminal, tty = process_info()
         data = {"provider": "codex", "session_id": sid, "state": state, "ts": ts,
-                "turn_id": turn, "last_event": event, "pending_tools": pending,
+                "turn_id": turn, "last_event": event, "pending_tools": pending, "detail": detail,
                 "cwd": hook.get("cwd") or previous.get("cwd", ""),
                 "transcript_path": transcript, "model": hook.get("model") or previous.get("model", ""),
                 "agent_pid": agent, "terminal": terminal, "tty": tty}
@@ -164,6 +172,17 @@ reset_tab() {
 
 json=$(cat 2>/dev/null || echo "{}")
 
+# PreToolUse fires the moment an approved tool starts, which is the only signal that
+# a permission prompt was answered. It also fires for every other tool call, so only
+# a session that is currently waiting pays for the Python write; the rest exit here.
+if [ "$state" = "resume" ]; then
+  if [[ "$json" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]]; then
+    existing="$SESSIONS_DIR/${BASH_REMATCH[1]}.json"
+    if [ -f "$existing" ] && ! grep -q '"state": "waiting"' "$existing"; then exit 0; fi
+  fi
+  state=working
+fi
+
 # Values reach Python via the environment (not shell interpolation), so paths or hook
 # fields containing quotes cannot break or inject into the Python source.
 # Python prints the effective state ("" when the write was skipped); the shell then
@@ -184,6 +203,9 @@ event           = hook.get("hook_event_name", "")
 session_id      = str(hook.get("session_id", "default")).replace("/", "_")
 cwd             = hook.get("cwd", "")
 transcript_path = hook.get("transcript_path", "")
+# Notification hooks carry a human sentence ("Claude needs your permission to use
+# Bash"); the console shows it on the row so the user knows what is being asked.
+detail          = " ".join(str(hook.get("message", "") or "").split())[:200] if state == "waiting" else ""
 
 # Walk the process tree to find the Claude PID, hosting terminal app, and TTY device.
 # TTY is read from the ps snapshot for the Claude process -- the hook process itself has
@@ -286,11 +308,17 @@ with open(lock_path, "w") as lf:
     # between the fast-path read above and acquiring the lock.
     skip = False
     prev_state = ""
+    prev_ts = 0
     try:
         with open(session_file) as f:
-            prev_state = json.load(f).get("state", "")
+            _locked_prev = json.load(f)
+            prev_state = _locked_prev.get("state", "")
+            prev_ts = int(_locked_prev.get("ts", 0) or 0)
     except Exception:
         pass
+    # ts means "time in the current state": a repeat of the same state keeps it.
+    if prev_state == state and prev_ts:
+        ts = prev_ts
 
     if state == "waiting":
         if prev_state == "done":
@@ -308,7 +336,7 @@ with open(lock_path, "w") as lf:
             json.dump({"state": state, "ts": ts, "session_id": session_id,
                        "cwd": cwd, "transcript_path": transcript_path,
                        "claude_pid": claude_pid, "tty": tty_device,
-                       "terminal": terminal_app}, f)
+                       "terminal": terminal_app, "detail": detail}, f)
         os.replace(tmp, session_file)
         print(state)
 ' 2>/dev/null)

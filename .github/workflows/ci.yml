@@ -20,6 +20,7 @@ jobs:
           swift run CCBeaconTests
           bash -n ccbeacon.sh
           python3 Tests/Hooks/test_codex.py
+          python3 Tests/Hooks/test_claude.py
 
       - name: Native UI and popover layout regressions
         run: .build/release/ccbeacon --ui-check

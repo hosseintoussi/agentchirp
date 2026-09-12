@@ -74,9 +74,40 @@ suite("fmtElapsed") {
     expect(fmtElapsed(60),   "1m",   "60s → 1m")
     expect(fmtElapsed(90),   "1m",   "90s → 1m")
     expect(fmtElapsed(3599), "59m",  "3599s → 59m")
-    expect(fmtElapsed(3600), "1h0m", "3600s → 1h0m")
-    expect(fmtElapsed(3661), "1h1m", "3661s → 1h1m")
-    expect(fmtElapsed(7260), "2h1m", "7260s → 2h1m")
+    expect(fmtElapsed(3600), "1h 0m", "3600s → 1h 0m")
+    expect(fmtElapsed(3661), "1h 1m", "3661s → 1h 1m")
+    expect(fmtElapsed(7260), "2h 1m", "7260s → 2h 1m")
+    expect(fmtElapsed(90000), "1d 1h", "90000s → 1d 1h")
+}
+
+suite("stateClock") {
+    expect(stateClock("waiting", elapsed: 120), "waiting 2m", "waiting verb")
+    expect(stateClock("working", elapsed: 2100), "working 35m", "working verb")
+    expect(stateClock("idle", elapsed: 7260), "idle 2h 1m", "idle verb")
+    expect(stateClock("done", elapsed: 5), "idle 5s", "done reads as idle")
+}
+
+suite("waitingSummary") {
+    expect(waitingSummary(""), "Waiting for you", "unknown detail")
+    expect(waitingSummary("Claude needs your permission to use Bash"), "Needs permission for Bash", "claude permission")
+    expect(waitingSummary("Claude is waiting for your input"), "Waiting for your answer", "claude idle prompt")
+    expect(waitingSummary("Bash: git push origin main"), "Needs permission for Bash · git push origin main", "codex tool + command")
+    expect(waitingSummary("apply_patch"), "apply_patch", "codex tool only")
+    expect(waitingSummary("Something else entirely"), "Something else entirely", "passthrough")
+}
+
+suite("consoleOrder") {
+    let now: TimeInterval = 1_000_000
+    func s(_ id: String, _ state: String, _ age: TimeInterval) -> Session {
+        Session(id: id, state: state, ts: now - age, cwd: "/tmp/\(id)", transcriptPath: "",
+                totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "")
+    }
+    let ordered = consoleOrder([s("idle-old", "idle", 900), s("work-new", "working", 10), s("wait-new", "waiting", 5),
+                                s("wait-old", "waiting", 300), s("work-old", "working", 600), s("idle-new", "idle", 30),
+                                s("p10", "working", 100), s("p2", "working", 100)])
+    expect(ordered.map { $0.id }.joined(separator: ","),
+           "wait-old,wait-new,work-old,p2,p10,work-new,idle-new,idle-old",
+           "input longest-waiting first, working longest-running first, idle newest first, natural ids")
 }
 
 suite("fmtBarTime") {
@@ -184,13 +215,15 @@ suite("readTokens") {
 }
 
 suite("mergedHookSettings") {
-    // Empty settings → all six events added.
+    // Empty settings → all seven events added.
     let fresh = mergedHookSettings([:])
     expect(fresh != nil, true, "empty settings gains hooks")
     let freshHooks = fresh?["hooks"] as? [String: Any] ?? [:]
     expect(freshHooks.keys.sorted().joined(separator: ","),
-           "Notification,SessionEnd,SessionStart,Stop,StopFailure,UserPromptSubmit",
-           "all six events configured")
+           "Notification,PreToolUse,SessionEnd,SessionStart,Stop,StopFailure,UserPromptSubmit",
+           "all seven events configured")
+    expect(String(describing: freshHooks["PreToolUse"] ?? "").contains("ccbeacon.sh resume"), true,
+           "PreToolUse resumes a waiting session")
     expect((freshHooks["Notification"] as? [[String: Any]])?.count ?? 0, 2,
            "Notification gets both matchers")
 
@@ -212,7 +245,8 @@ suite("mergedHookSettings") {
     expect(String(describing: mergedHooks["Stop"] ?? "").contains("/custom/path"), true,
            "user's custom command preserved")
     expect(mergedHooks["SessionStart"] != nil, true, "missing event added")
-    expect(mergedHooks["PreToolUse"] != nil, true, "unrelated hooks preserved")
+    expect(String(describing: mergedHooks["PreToolUse"] ?? "").contains("other-tool"), true, "unrelated hooks preserved")
+    expect((mergedHooks["PreToolUse"] as? [[String: Any]])?.count ?? 0, 2, "ccbeacon entry added beside the user's")
     expect(merged?["model"] as? String ?? "", "opus", "non-hook settings preserved")
 }
 

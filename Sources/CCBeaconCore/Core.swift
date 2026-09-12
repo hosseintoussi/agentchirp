@@ -101,20 +101,28 @@ public struct Session {
     public let terminal: String
     public let provider: AgentProvider
     public let lastEvent: String
+    /// What the agent is waiting for, as recorded by the hook (permission message,
+    /// tool name and command). Empty when unknown or not waiting.
+    public let detail: String
 
     public init(id: String, state: String, ts: TimeInterval, cwd: String, transcriptPath: String,
                 totalTokens: Int, inputTokens: Int, outputTokens: Int, cacheTokens: Int,
                 model: String, tty: String = "", terminal: String = "",
-                provider: AgentProvider = .claude, lastEvent: String = "") {
+                provider: AgentProvider = .claude, lastEvent: String = "", detail: String = "") {
         self.id = id; self.state = state; self.ts = ts; self.cwd = cwd
         self.transcriptPath = transcriptPath; self.totalTokens = totalTokens
         self.inputTokens = inputTokens; self.outputTokens = outputTokens
         self.cacheTokens = cacheTokens; self.model = model
         self.tty = tty; self.terminal = terminal
-        self.provider = provider; self.lastEvent = lastEvent
+        self.provider = provider; self.lastEvent = lastEvent; self.detail = detail
     }
 
     public var elapsed: Int { max(0, Int(Date().timeIntervalSince1970 - ts)) }
+
+    /// Sessions that finished their last turn within the completion window.
+    public func finished(within seconds: TimeInterval, now: TimeInterval = Date().timeIntervalSince1970) -> Bool {
+        state == "idle" && (provider == .claude || lastEvent == "Stop") && lastEvent != "Interrupt" && now - ts < seconds
+    }
 
     public var dirName: String {
         let last = URL(fileURLWithPath: cwd).lastPathComponent
@@ -239,7 +247,8 @@ public func loadSessions(dir: String = sessionsDir, provider: AgentProvider = .c
             tty:            json["tty"]           as? String ?? "",
             terminal:       json["terminal"]      as? String ?? "",
             provider:       provider,
-            lastEvent:      json["last_event"] as? String ?? ""
+            lastEvent:      json["last_event"] as? String ?? "",
+            detail:         state == "waiting" ? (json["detail"] as? String ?? "") : ""
         )
     }
 
@@ -268,9 +277,46 @@ public func loadAllSessions(claudeDir: String = sessionsDir, codexDir: String = 
 // MARK: - Formatters
 
 public func fmtElapsed(_ s: Int) -> String {
-    if s < 60   { return "\(s)s" }
-    if s < 3600 { return "\(s / 60)m" }
-    return "\(s / 3600)h\((s % 3600) / 60)m"
+    if s < 60    { return "\(s)s" }
+    if s < 3600  { return "\(s / 60)m" }
+    if s < 86400 { return "\(s / 3600)h \((s % 3600) / 60)m" }
+    return "\(s / 86400)d \((s % 86400) / 3600)h"
+}
+
+/// The row clock: the state as a verb plus time spent in that state, so "2m"
+/// never has to be decoded ("waiting 2m", "working 35m", "idle 2h 1m").
+public func stateClock(_ state: String, elapsed: Int) -> String {
+    let verb: String
+    switch state {
+    case "waiting": verb = "waiting"
+    case "working": verb = "working"
+    default:        verb = "idle"
+    }
+    return "\(verb) \(fmtElapsed(elapsed))"
+}
+
+/// Turns the hook's raw waiting detail into one short line: what the agent needs.
+/// Claude sends notification text; Codex sends "Tool: command".
+public func waitingSummary(_ detail: String) -> String {
+    let text = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty { return "Waiting for you" }
+    for marker in ["permission to use ", "permission to run "] {
+        if let range = text.range(of: marker, options: .caseInsensitive) {
+            return "Needs permission for \(text[range.upperBound...])"
+        }
+    }
+    let lowered = text.lowercased()
+    if lowered.contains("waiting for your input") || lowered.contains("needs your input")
+        || lowered.contains("question") {
+        return "Waiting for your answer"
+    }
+    if let colon = text.firstIndex(of: ":"), !text[..<colon].isEmpty,
+       text[..<colon].allSatisfy({ !$0.isWhitespace }) {
+        let tool = text[..<colon]
+        let command = text[text.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        return command.isEmpty ? "Needs permission for \(tool)" : "Needs permission for \(tool) · \(command)"
+    }
+    return text
 }
 
 public func fmtBarTime(_ s: Int) -> String {
@@ -288,3 +334,13 @@ public func fmtK(_ n: Int) -> String {
 }
 
 public func cleanModel(_ m: String) -> String { m.hasPrefix("claude-") ? String(m.dropFirst(7)) : m }
+
+/// Console order: sessions that need input first (longest waiting at the top),
+/// then working (longest running first), then idle (most recent first).
+public func consoleOrder(_ sessions: [Session]) -> [Session] {
+    sessions.sorted {
+        if $0.priority != $1.priority { return $0.priority > $1.priority }
+        if $0.ts != $1.ts { return $0.state == "idle" ? $0.ts > $1.ts : $0.ts < $1.ts }
+        return $0.id.localizedStandardCompare($1.id) == .orderedAscending
+    }
+}

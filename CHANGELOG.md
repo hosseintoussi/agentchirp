@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Keep awake: while any session is working the app holds a system sleep assertion (display may still sleep). An Awake button in the header turns it off; the preference persists
+
+### Changed — signal-first console
+- The menu bar beacon is calm: a new request flashes three times and then holds steady orange; working breathes slowly (opacity only) and idle is steady. The continuous 30 fps attention pulse is gone. A completion shows green even while other sessions work
+- The console header now answers the question ("2 need input", "3 working", "All quiet", "Nothing running") beside a beacon lit by the top state; the top right holds captioned Awake, Sounds, and Quit buttons (version on the quit tooltip) instead of a menu
+- Tabs are gone. One list orders sessions by what needs you: waiting (longest first), working (longest running first), idle (newest first). Rows carry a state dot and a verb clock ("waiting 2m", "idle 2h 1m")
+- Waiting rows say what the agent is asking for ("Needs permission for Bash", "Waiting for your answer"); the hook records the Notification message (Claude) or the tool and command (Codex)
+- One orange everywhere: the light-mode attention color is derived from system orange instead of a hardcoded brown; the console root is clear so the popover material shows through; fills double under Increase Contrast; row glyphs use secondary label color
+- Copying a path for an unsupported terminal now says "Copied" in the row; tooltips name the terminal that can't be focused
+- The needs-input sound is Ping instead of Sosumi
+- Same-name projects show `parent/name`; VoiceOver labels include state, time, and the ask; keyboard focus draws the system focus ring
+- Header shrank from 92 to 56 points and the footer was removed; the popover fits its content
+- Granting a permission now flips the session back to working immediately: a `PreToolUse` hook (`ccbeacon.sh resume`) is installed for Claude Code and only writes when the session was waiting. Previously the app waited for the transcript to change, which could take as long as the approved tool ran
+- `fmtElapsed` spaces units ("2h 1m") and adds days
+
+
 ## [2.1.3] - 2026-07-02
 
 ### Changed

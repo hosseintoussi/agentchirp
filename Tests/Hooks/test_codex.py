@@ -42,6 +42,17 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(self.fire("Stop", "old")["state"], "working")
         self.assertEqual(self.fire("SessionStart", "new")["state"], "working")
 
+    def test_detail_records_the_ask(self):
+        self.fire("UserPromptSubmit")
+        command = "  git   push origin main\n"
+        state = self.fire("PermissionRequest", tool_name="Bash", tool_input={"command": command})
+        self.assertEqual(state["detail"], "Bash: git push origin main")
+        state = self.fire("PostToolUse", tool_name="Bash", tool_input={"command": command})
+        self.assertEqual(state["detail"], "")
+        state = self.fire("PermissionRequest", tool_name="apply_patch", tool_input={"patch": "x"})
+        self.assertEqual(state["detail"], "apply_patch")
+        self.assertEqual(self.fire("Stop")["detail"], "")
+
     def test_parallel_approvals(self):
         self.fire("UserPromptSubmit")
         for command in ("one", "two"):

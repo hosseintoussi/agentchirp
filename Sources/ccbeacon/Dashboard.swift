@@ -1,24 +1,40 @@
 import Cocoa
 import CCBeaconCore
 
-private let attentionColor = NSColor(name: nil) { appearance in
+// MARK: - Palette
+//
+// One orange carries "needs input" everywhere: the menu bar, the header beacon,
+// the state dot, and the clock. Light mode darkens it for text contrast on white;
+// dark mode uses the system orange as is. Everything else is a system semantic color.
+
+let attentionColor = NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? .systemOrange : NSColor(red: 0.62, green: 0.32, blue: 0.02, alpha: 1)
+        ? .systemOrange
+        : NSColor.systemOrange.blended(withFraction: 0.38, of: .black) ?? .systemOrange
 }
 
-private func neutralFill(_ opacity: CGFloat) -> NSColor {
+let completionColor = NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? .systemGreen
+        : NSColor.systemGreen.blended(withFraction: 0.3, of: .black) ?? .systemGreen
+}
+
+/// Neutral fills for hover, pressed, and separators. Increase Contrast doubles them.
+func neutralFill(_ opacity: CGFloat) -> NSColor {
     NSColor(name: nil) { appearance in
-        (appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor.white : NSColor.black).withAlphaComponent(opacity)
+        let boost: CGFloat = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 2 : 1
+        return (appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.white : NSColor.black).withAlphaComponent(min(1, opacity * boost))
     }
 }
 
 // All surfaces resolve colors while drawing so an open console follows appearance changes.
 class Surface: NSView {
-    var tint: NSColor = .windowBackgroundColor
+    var tint: NSColor = .clear
     var radius: CGFloat = 0
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
+        guard tint != .clear else { return }
         tint.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
@@ -26,21 +42,17 @@ class Surface: NSView {
 
 // The window owns the outer size. These permanent regions always lay out from
 // the actual bounds; session updates only change the document inside the list.
+// The root stays clear so NSPopover's own material shows through.
 final class DashboardSurface: Surface {
-    static let headerHeight: CGFloat = 92
-    static let footerHeight: CGFloat = 36
+    static let headerHeight: CGFloat = 56
     let header = Surface()
-    let footer = Surface()
     let scroll = NSScrollView()
     let document = Surface()
-    var documentHeight: CGFloat = 120
+    var documentHeight: CGFloat = 96
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         autoresizesSubviews = false
-        header.tint = .clear
-        footer.tint = .clear
-        document.tint = .clear
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
@@ -50,7 +62,6 @@ final class DashboardSurface: Surface {
         scroll.documentView = document
         addSubview(header)
         addSubview(scroll)
-        addSubview(footer)
         layoutRegions()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -65,10 +76,8 @@ final class DashboardSurface: Surface {
     }
     func layoutRegions() {
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: Self.headerHeight)
-        let listHeight = max(0, bounds.height - Self.headerHeight - Self.footerHeight)
+        let listHeight = max(0, bounds.height - Self.headerHeight)
         scroll.frame = NSRect(x: 0, y: Self.headerHeight, width: bounds.width, height: listHeight)
-        footer.frame = NSRect(x: 0, y: Self.headerHeight + listHeight,
-                              width: bounds.width, height: Self.footerHeight)
         scroll.tile()
         document.setFrameSize(NSSize(width: scroll.contentSize.width,
                                      height: max(documentHeight, scroll.contentSize.height)))
@@ -81,8 +90,15 @@ final class DashboardSurface: Surface {
     }
 }
 
+// MARK: - Beacon mark
+//
+// The mark never changes shape. Color carries the state that matters: orange for
+// input, green for done, neutral otherwise.
+
 final class BeaconMark: NSView {
-    override func draw(_ dirtyRect: NSRect) { Self.draw(in: bounds) }
+    var color: NSColor = .labelColor { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) { Self.draw(in: bounds, color: color) }
+
     static func draw(in rect: NSRect, color: NSColor = .labelColor) {
         let center = NSPoint(x: rect.midX, y: rect.midY)
         color.setStroke()
@@ -101,14 +117,33 @@ final class BeaconMark: NSView {
     }
     static func image(size: CGFloat, color: NSColor? = nil) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            // Idle is a template mask; activity uses explicit artwork color because
-            // NSStatusBarButton does not reliably apply custom content tints.
+            // Neutral states are template masks; input and completion draw explicit
+            // artwork color because NSStatusBarButton does not reliably apply tints.
             draw(in: rect, color: color ?? .black); return true
         }
         image.isTemplate = color == nil
         return image
     }
 }
+
+/// The per-row state marker. Shape and color both change, so the state survives
+/// color-blindness: filled orange (input), filled accent (working), hollow (idle).
+final class StateDot: NSView {
+    enum Kind { case waiting, working, finished, idle }
+    var kind: Kind = .idle { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) {
+        let circle = NSBezierPath(ovalIn: bounds.insetBy(dx: 0.75, dy: 0.75))
+        switch kind {
+        case .waiting:  attentionColor.setFill(); circle.fill()
+        case .working:  NSColor.controlAccentColor.setFill(); circle.fill()
+        case .finished: completionColor.setFill(); circle.fill()
+        case .idle:
+            NSColor.secondaryLabelColor.setStroke(); circle.lineWidth = 1.5; circle.stroke()
+        }
+    }
+}
+
+// MARK: - Controls
 
 class ActionButton: NSButton {
     var handler: (() -> Void)?
@@ -118,14 +153,69 @@ class ActionButton: NSButton {
         bezelStyle = .rounded
         controlSize = .small
         font = .systemFont(ofSize: 11, weight: .medium)
-        if let symbol { image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
-        imagePosition = .imageLeading
+        if let symbol { image = NSImage(systemSymbolName: symbol, accessibilityDescription: title) }
+        // An icon-only button must not reserve title space, or the glyph sits off-center.
+        imagePosition = title.isEmpty && symbol != nil ? .imageOnly : .imageLeading
         target = self
         self.action = #selector(performAction)
         handler = action
     }
     required init?(coder: NSCoder) { fatalError() }
     @objc private func performAction() { handler?() }
+}
+
+// Header buttons: an icon with a short caption beneath it, like Control Center.
+// Drawn by hand so the glyph and caption sit 3 points apart; NSButton's own
+// image-above layout spreads them too far. Quiet at rest; a rounded fill and
+// full-strength glyph and caption on hover or keyboard focus; darker while pressed.
+final class HeaderIconButton: ActionButton {
+    private var hovering = false
+    var caption = "" { didSet { title = caption; needsDisplay = true } }
+    override var isFlipped: Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder(); needsDisplay = true; return result
+    }
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder(); needsDisplay = true; return result
+    }
+    override var isHighlighted: Bool { didSet { needsDisplay = true } }
+    var isActive: Bool { hovering || isHighlighted || window?.firstResponder === self }
+    override func draw(_ dirtyRect: NSRect) {
+        let focused = window?.firstResponder === self
+        if isActive {
+            neutralFill(isHighlighted ? 0.12 : 0.06).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        }
+        if focused {
+            NSColor.keyboardFocusIndicatorColor.setStroke()
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 5, yRadius: 5)
+            ring.lineWidth = 2
+            ring.stroke()
+        }
+        let color: NSColor = isActive ? .labelColor : .secondaryLabelColor
+        if let symbol = image?.withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) {
+            let size = symbol.size
+            let glyphRect = NSRect(x: (bounds.width - size.width) / 2, y: 7, width: size.width, height: size.height)
+            let tinted = NSImage(size: size, flipped: false) { rect in
+                symbol.draw(in: rect); color.set(); rect.fill(using: .sourceIn); return true
+            }
+            tinted.draw(in: glyphRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        let text = NSAttributedString(string: caption, attributes: [
+            .font: NSFont.systemFont(ofSize: 9, weight: .medium), .foregroundColor: color
+        ])
+        let width = text.size().width
+        text.draw(at: NSPoint(x: (bounds.width - width) / 2, y: 26))
+    }
 }
 
 // One native button owns the whole row, including keyboard activation and hover.
@@ -163,23 +253,67 @@ final class SessionRow: ActionButton {
         super.keyDown(with: event)
     }
     override func draw(_ dirtyRect: NSRect) {
-        if hovering || isHighlighted || window?.firstResponder === self {
-            neutralFill(isHighlighted ? 0.10 : 0.055).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 2), xRadius: 5, yRadius: 5).fill()
+        let focused = window?.firstResponder === self
+        if hovering || isHighlighted || focused {
+            neutralFill(isHighlighted ? 0.12 : 0.06).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 2), xRadius: 6, yRadius: 6).fill()
+        }
+        // Keyboard focus draws the system focus color as a ring, like every native list.
+        if focused {
+            NSColor.keyboardFocusIndicatorColor.setStroke()
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 3), xRadius: 5, yRadius: 5)
+            ring.lineWidth = 2
+            ring.stroke()
         }
     }
 }
 
-enum SessionTab: String, CaseIterable {
-    case needsInput = "Needs input", working = "Working", idle = "Idle"
-    func includes(_ session: Session) -> Bool {
-        switch self {
-        case .needsInput: return session.state == "waiting"
-        case .working: return session.state == "working"
-        case .idle: return session.state != "working" && session.state != "waiting"
+// MARK: - Header copy
+
+struct ConsoleSummary {
+    let headline: String
+    let subline: String
+    let waiting: Int
+    let working: Int
+    let idle: Int
+    let finishedName: String?
+
+    static let completionWindow: TimeInterval = 10
+
+    init(_ sessions: [Session], watching: [AgentProvider], now: TimeInterval = Date().timeIntervalSince1970) {
+        waiting = sessions.filter { $0.state == "waiting" }.count
+        working = sessions.filter { $0.state == "working" }.count
+        idle = sessions.count - waiting - working
+        finishedName = sessions.filter { $0.finished(within: Self.completionWindow, now: now) }
+            .max { $0.ts < $1.ts }?.dirName
+        func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
+        let watchingLine = watching.contains(.codex)
+            ? "Watching Claude Code and Codex" : "Watching Claude Code · Codex not installed"
+        if waiting > 0 {
+            headline = "\(waiting) need\(waiting == 1 ? "s" : "") input"
+            let rest = [working > 0 ? "\(working) working" : nil, idle > 0 ? "\(idle) idle" : nil]
+                .compactMap { $0 }
+            subline = rest.isEmpty ? "Nothing else running" : rest.joined(separator: " · ")
+        } else if working > 0 {
+            headline = "\(working) working"
+            subline = finishedName.map { "\($0) just finished" }
+                ?? (idle > 0 ? "\(idle) idle · nothing needs you" : "Nothing needs you yet")
+        } else if idle > 0 {
+            headline = "All quiet"
+            subline = finishedName.map { "\($0) just finished" } ?? plural(idle, "idle session")
+        } else {
+            headline = "Nothing running"
+            subline = watchingLine
         }
     }
+
+    var markColor: NSColor {
+        waiting > 0 ? attentionColor : finishedName != nil ? completionColor : .labelColor
+    }
+    var headlineColor: NSColor { waiting > 0 ? attentionColor : .labelColor }
 }
+
+// MARK: - Controller
 
 final class DashboardController: NSViewController {
     let width: CGFloat = 400
@@ -188,19 +322,17 @@ final class DashboardController: NSViewController {
     private var signature = ""
     private var currentSessions: [Session] = []
     private var currentMuted = false
-    private(set) var selectedTab: SessionTab = .working
-    private var tabOffsets: [SessionTab: CGFloat] = [:]
     private var pendingOffset: CGFloat?
     private var presentationListHeight: CGFloat?
     private var presentationScreenHeight: CGFloat?
-    private var hasSelection = false
+    private var copiedUntil: [String: Date] = [:]
+    /// Providers whose hook directories exist; the empty state reports them.
+    var watchedProviders: [AgentProvider] = [.claude, .codex]
 
-    // Choose the most useful state on opening, then leave navigation under the
-    // user's control while live updates arrive. Pin the viewport for this opening.
+    // Pin the viewport for this opening from the current list; live updates then
+    // change only the scroll document.
     func prepareForPresentation(_ sessions: [Session], muted: Bool, screenHeight: CGFloat? = nil) {
         presentationScreenHeight = screenHeight
-        selectedTab = SessionTab.allCases.first { tab in sessions.contains(where: tab.includes) } ?? .needsInput
-        hasSelection = true
         presentationListHeight = nil
         pendingOffset = 0
         signature = ""
@@ -219,25 +351,20 @@ final class DashboardController: NSViewController {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
-    func selectTab(_ tab: SessionTab) {
-        guard tab != selectedTab else { return }
-        tabOffsets[selectedTab] = scroll.contentView.bounds.origin.y
-        selectedTab = tab
-        pendingOffset = tabOffsets[tab] ?? 0
-        signature = ""
-        refresh(currentSessions, muted: currentMuted)
-        if let button = focusButtons["tab:" + tab.rawValue] { view.window?.makeFirstResponder(button) }
-    }
-    private let sessionRowHeight: CGFloat = 64
-    private var timeLabels: [String: NSTextField] = [:]
+    let sessionRowHeight: CGFloat = 64
+    private let emptyHeight: CGFloat = 96
+    private var clockLabels: [String: NSTextField] = [:]
     private var sessionRows: [String: SessionRow] = [:]
     private var focusButtons: [String: NSButton] = [:]
     var onFocus: ((Session) -> Void)?
     var onMute: (() -> Void)?
+    var onKeepAwake: (() -> Void)?
     var onQuit: (() -> Void)?
+    /// Whether the app holds the Mac awake while sessions work; drives the header button.
+    var keepAwake = true
 
     override func loadView() {
-        view = DashboardSurface(frame: NSRect(x: 0, y: 0, width: width, height: 248))
+        view = DashboardSurface(frame: NSRect(x: 0, y: 0, width: width, height: 152))
     }
 
     @discardableResult
@@ -254,198 +381,185 @@ final class DashboardController: NSViewController {
         return field
     }
 
+    private func clockText(_ session: Session) -> String {
+        if let until = copiedUntil[session.id], until > Date() { return "Copied" }
+        return stateClock(session.state, elapsed: session.elapsed)
+    }
+
     func refresh(_ sessions: [Session], muted: Bool) {
         _ = view
-        if !hasSelection {
-            selectedTab = SessionTab.allCases.first { tab in sessions.contains(where: tab.includes) } ?? .needsInput
-            hasSelection = true
-        }
         if presentationListHeight == nil {
-            let largestTabCount = SessionTab.allCases.map { tab in sessions.filter { tab.includes($0) }.count }.max() ?? 0
             let screenHeight = presentationScreenHeight ?? NSScreen.main?.visibleFrame.height ?? 700
-            // Reserve the fixed header/footer plus 66 points for popover chrome
-            // and screen-edge clearance. Use the status item's screen on opening.
-            let screenBudget = max(0, screenHeight - DashboardSurface.headerHeight
-                - DashboardSurface.footerHeight - 66)
-            presentationListHeight = min(max(120, CGFloat(largestTabCount) * sessionRowHeight + 8),
-                                         420, screenBudget)
-            view.setFrameSize(NSSize(width: width, height: DashboardSurface.headerHeight
-                + presentationListHeight! + DashboardSurface.footerHeight))
+            // Reserve the header plus 66 points for popover chrome and screen-edge clearance.
+            let screenBudget = max(0, screenHeight - DashboardSurface.headerHeight - 66)
+            let content = sessions.isEmpty ? emptyHeight : CGFloat(sessions.count) * sessionRowHeight + 8
+            presentationListHeight = min(max(emptyHeight, content), 456, screenBudget)
+            view.setFrameSize(NSSize(width: width, height: DashboardSurface.headerHeight + presentationListHeight!))
         }
         currentSessions = sessions; currentMuted = muted
+        let summary = ConsoleSummary(sessions, watching: watchedProviders)
         // Token and clock updates never replace focused controls or move the scroll position.
         let next = sessions.map {
-            "\($0.provider.rawValue)|\($0.id)|\($0.state)|\($0.cwd)|\($0.model)|\($0.tty)|\($0.terminal)"
-        }.joined(separator: "\n") + "\(muted)"
+            "\($0.provider.rawValue)|\($0.id)|\($0.state)|\($0.cwd)|\($0.model)|\($0.tty)|\($0.terminal)|\($0.detail)"
+        }.joined(separator: "\n") + "|\(muted)|\(keepAwake)|\(summary.finishedName ?? "")|\(copiedUntil.keys.sorted())"
         if next != signature {
             signature = next
-            rebuild(sessions, muted: muted)
+            rebuild(sessions, summary: summary)
         }
         for session in sessions {
-            timeLabels[session.id]?.stringValue = fmtElapsed(session.elapsed)
-            let usage = session.totalTokens == 0 ? "" :
-                "\nIN \(fmtK(session.inputTokens)) · OUT \(fmtK(session.outputTokens)) · CACHE \(fmtK(session.cacheTokens))"
-            let action = AppDelegate.focusableTerminals.contains(session.terminal) && !session.tty.isEmpty
-                ? "Open in \(session.terminal)" : "Copy project path · Terminal link unavailable"
-            sessionRows[session.id]?.toolTip = "\(action)\n\(session.cwd)\(usage)"
+            clockLabels[session.id]?.stringValue = clockText(session)
+            sessionRows[session.id]?.toolTip = tooltip(session)
         }
     }
 
-    private func rebuild(_ allSessions: [Session], muted: Bool) {
-        let sessions = allSessions.filter { selectedTab.includes($0) }.sorted {
-            if $0.ts != $1.ts { return selectedTab == .needsInput ? $0.ts < $1.ts : $0.ts > $1.ts }
-            return $0.id < $1.id
+    private func tooltip(_ session: Session) -> String {
+        let usage = session.totalTokens == 0 ? "" :
+            "\n\(fmtK(session.inputTokens)) in · \(fmtK(session.outputTokens)) out · \(fmtK(session.cacheTokens)) cached"
+        let action: String
+        if AppDelegate.focusableTerminals.contains(session.terminal) && !session.tty.isEmpty {
+            action = "Open in \(session.terminal)"
+        } else if session.terminal.isEmpty {
+            action = "Copy project path · terminal not detected"
+        } else {
+            action = "Copy project path · \(session.terminal) can't be focused"
         }
+        return "\(action)\n\(session.cwd)\(usage)"
+    }
+
+    private func rebuild(_ allSessions: [Session], summary: ConsoleSummary) {
+        let sessions = consoleOrder(allSessions)
         let oldOffset = NSPoint(x: 0, y: pendingOffset ?? scroll.contentView.bounds.origin.y)
         pendingOffset = nil
         let focusedID = focusButtons.first { $0.value === view.window?.firstResponder }?.key
         // Never detach the scroll view or replace its clip/document view during
         // interaction. In-flight scrolling and focus remain attached to one hierarchy.
         surface.header.subviews.forEach { $0.removeFromSuperview() }
-        surface.footer.subviews.forEach { $0.removeFromSuperview() }
         surface.document.subviews.forEach { $0.removeFromSuperview() }
-        timeLabels.removeAll(); sessionRows.removeAll(); focusButtons.removeAll()
-        surface.documentHeight = sessions.isEmpty ? 120 : CGFloat(sessions.count) * sessionRowHeight + 8
+        clockLabels.removeAll(); sessionRows.removeAll(); focusButtons.removeAll()
+        surface.documentHeight = sessions.isEmpty ? emptyHeight : CGFloat(sessions.count) * sessionRowHeight + 8
         surface.layoutRegions()
         let header = surface.header
-        let footer = surface.footer
         let document = surface.document
 
-        let mark = BeaconMark(frame: NSRect(x: 20, y: 17, width: 21, height: 21))
+        // Header: the beacon lit by the top state, and the answer in one sentence,
+        // closed by a full-width hairline so the list reads as its own region.
+        let rule = Surface(frame: NSRect(x: 0, y: DashboardSurface.headerHeight - 1, width: header.bounds.width, height: 1))
+        rule.tint = neutralFill(0.1)
+        rule.autoresizingMask = [.width]
+        header.addSubview(rule)
+        let mark = BeaconMark(frame: NSRect(x: 16, y: 18, width: 20, height: 20))
+        mark.color = summary.markColor
+        mark.setAccessibilityElement(false)
         header.addSubview(mark)
-        label("ccbeacon", in: header, x: 51, y: 12, w: 160, size: 13, weight: .semibold)
-        label("v\(appVersion)", in: header, x: 51, y: 30, w: 160,
-              size: 10, color: .secondaryLabelColor)
+        label(summary.headline, in: header, x: 44, y: 11, w: 300, size: 13, weight: .semibold,
+              color: summary.headlineColor)
+        label(summary.subline, in: header, x: 44, y: 30, w: 300, size: 11, color: .secondaryLabelColor)
 
-        let settings = ActionButton("", symbol: "ellipsis.circle") { [weak self] in self?.showSettings() }
-        settings.frame = NSRect(x: 350, y: 14, width: 28, height: 26)
-        settings.isBordered = false
-        settings.setAccessibilityLabel("Settings")
-        settings.toolTip = "Settings"
-        header.addSubview(settings)
-        focusButtons["settings"] = settings
-
-        // Only the selected segment has a background; the shared surface stays clear.
-        for (index, tab) in SessionTab.allCases.enumerated() {
-            let matches = allSessions.filter { tab.includes($0) }
-            let selected = selectedTab == tab
-            let button = ActionButton("\(tab.rawValue)  \(matches.count)") { [weak self] in self?.selectTab(tab) }
+        // Three quiet header controls with captions: keep awake, sounds, quit.
+        func control(_ symbol: String, _ caption: String, x: CGFloat, key: String,
+                     tip: String, a11y: String, action: @escaping () -> Void) {
+            let button = HeaderIconButton("", symbol: symbol, action: action)
+            button.frame = NSRect(x: x, y: 6, width: 44, height: 44)
             button.isBordered = false
             button.focusRingType = .none
-            button.frame = NSRect(x: 16 + CGFloat(index) * 124, y: 54, width: 120, height: 28)
-            if selected {
-                let selection = Surface(frame: button.frame)
-                selection.radius = 6
-                selection.tint = neutralFill(0.065)
-                header.addSubview(selection)
-            }
-            button.font = .systemFont(ofSize: 12, weight: selected ? .semibold : .regular)
-            let title = NSMutableAttributedString(string: button.title, attributes: [
-                .font: button.font!,
-                .foregroundColor: tab == .needsInput && !matches.isEmpty ? attentionColor : NSColor.labelColor
-            ])
-            title.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
-                range: (button.title as NSString).range(of: "  \(matches.count)", options: .backwards))
-            button.attributedTitle = title
-            button.setAccessibilityLabel("\(tab.rawValue), \(matches.count) sessions\(selected ? ", selected" : "")")
-            button.toolTip = "Show \(tab.rawValue.lowercased()) sessions"
-            header.addSubview(button); focusButtons["tab:" + tab.rawValue] = button
+            button.caption = caption
+            button.toolTip = tip
+            button.setAccessibilityLabel(a11y)
+            header.addSubview(button)
+            focusButtons[key] = button
         }
+        let awakeNow = keepAwake && summary.working > 0
+        control(keepAwake ? "sun.max.fill" : "moon.zzz", keepAwake ? "Awake" : "May sleep", x: 252, key: "awake",
+                tip: !keepAwake ? "Your Mac may sleep while sessions work · click to keep it awake"
+                    : awakeNow ? "Keeping your Mac awake while sessions work · click to allow sleep"
+                    : "Will keep your Mac awake while sessions work · click to allow sleep",
+                a11y: keepAwake ? "Keep awake on" : "Keep awake off") { [weak self] in self?.onKeepAwake?() }
+        let muted = currentMuted
+        control(muted ? "speaker.slash" : "speaker.wave.2", muted ? "Muted" : "Sounds", x: 300, key: "sound",
+                tip: muted ? "Sounds off · click to turn on" : "Sounds on · click to turn off",
+                a11y: muted ? "Sounds off" : "Sounds on") { [weak self] in self?.onMute?() }
+        control("power", "Quit", x: 348, key: "quit",
+                tip: "Quit ccbeacon \(appVersion)", a11y: "Quit ccbeacon") { [weak self] in self?.onQuit?() }
 
         var y: CGFloat = 4
         for session in sessions {
-            document.addSubview(row(session, y: y))
+            document.addSubview(row(session, y: y, summary: summary))
             y += sessionRowHeight
             if session.id != sessions.last?.id {
-                let separator = Surface(frame: NSRect(x: 28, y: y - 0.5, width: 344, height: 0.5))
-                separator.tint = neutralFill(0.09)
+                let separator = Surface(frame: NSRect(x: 32, y: y - 0.5, width: 340, height: 1))
+                separator.tint = neutralFill(0.1)
                 document.addSubview(separator)
             }
         }
         if sessions.isEmpty {
-            let title: String
-            let detail: String
-            if allSessions.isEmpty {
-                title = "Ready when you are"
-                detail = "Start a task in Claude Code or Codex."
-            } else {
-                switch selectedTab {
-                case .needsInput:
-                    title = "All caught up"
-                    detail = "Sessions that need your input will appear here."
-                case .working:
-                    title = "Nothing running"
-                    detail = "Start a task in Claude Code or Codex."
-                case .idle:
-                    title = "No idle sessions"
-                    detail = "Sessions appear here when their work stops."
-                }
-            }
-            label(title, in: document, x: 28, y: 26, w: 344, size: 13, weight: .medium)
-            label(detail, in: document, x: 28, y: 49, w: 344, size: 12, color: .secondaryLabelColor)
+            label("Ready when you are", in: document, x: 32, y: 24, w: 340, size: 13, weight: .medium)
+            label("Start a task in Claude Code or Codex and it appears here.",
+                  in: document, x: 32, y: 46, w: 340, size: 12, color: .secondaryLabelColor)
         }
-
-        let sound = ActionButton(muted ? "Sound off" : "Sound on", symbol: muted ? "speaker.slash" : "speaker.wave.2") { [weak self] in self?.onMute?() }
-        sound.frame = NSRect(x: 19, y: 4, width: 96, height: 24)
-        sound.isBordered = false
-        sound.contentTintColor = .secondaryLabelColor
-        sound.attributedTitle = NSAttributedString(string: sound.title, attributes: [
-            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor
-        ])
-        sound.toolTip = muted ? "Enable session sounds" : "Mute session sounds"
-        footer.addSubview(sound)
-        focusButtons["sound"] = sound
         if let focusedID {
-            let replacement = focusButtons[focusedID] ?? focusButtons["tab:" + selectedTab.rawValue]
+            let replacement = focusButtons[focusedID] ?? focusButtons["sound"]
             view.window?.makeFirstResponder(replacement)
         }
         surface.restoreOffset(oldOffset.y)
     }
 
-    func settingsMenu() -> NSMenu {
-        let menu = NSMenu()
-        let quit = NSMenuItem(title: "Quit ccbeacon", action: #selector(quitApp), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-        return menu
-    }
-
-    private func showSettings() {
-        guard let button = focusButtons["settings"] else { return }
-        settingsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 3), in: button)
-    }
-
+    @objc func toggleSounds() { onMute?() }
     @objc func quitApp() { onQuit?() }
 
-    private func row(_ session: Session, y: CGFloat) -> NSView {
+    private func row(_ session: Session, y: CGFloat, summary: ConsoleSummary) -> NSView {
         let canFocus = !session.tty.isEmpty && AppDelegate.focusableTerminals.contains(session.terminal)
         let card = SessionRow(canFocus ? "Open" : "Copy path") { [weak self] in
-            if canFocus { self?.onFocus?(session) }
-            else {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(session.cwd, forType: .string)
+            guard let self else { return }
+            if canFocus { self.onFocus?(session); return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(session.cwd, forType: .string)
+            // Say that something happened: the clock reads "Copied" for a moment.
+            self.copiedUntil[session.id] = Date(timeIntervalSinceNow: 1.5)
+            self.clockLabels[session.id]?.stringValue = "Copied"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+                guard let self else { return }
+                self.copiedUntil.removeValue(forKey: session.id)
+                self.refresh(self.currentSessions, muted: self.currentMuted)
             }
         }
         card.isBordered = false
         card.focusRingType = .none
-        card.frame = NSRect(x: 16, y: y, width: 368, height: sessionRowHeight)
+        card.frame = NSRect(x: 8, y: y, width: 384, height: sessionRowHeight)
         card.identifier = NSUserInterfaceItemIdentifier(session.id)
-        let name = session.dirName.isEmpty ? session.id : session.dirName
-        label(name, in: card, x: 12, y: 10, w: 250, size: 13, weight: .medium)
-        let clock = label("", in: card, x: 276, y: 11, w: 80, size: 11,
+
+        let dot = StateDot(frame: NSRect(x: 10, y: 15, width: 8, height: 8))
+        let finished = session.finished(within: ConsoleSummary.completionWindow)
+        dot.kind = session.state == "waiting" ? .waiting : session.state == "working" ? .working
+                 : finished ? .finished : .idle
+        card.addSubview(dot)
+
+        let duplicateName = currentSessions.filter { $0.dirName == session.dirName }.count > 1
+        let parent = URL(fileURLWithPath: session.cwd).deletingLastPathComponent().lastPathComponent
+        let baseName = session.dirName.isEmpty ? session.id : session.dirName
+        let name = duplicateName && !parent.isEmpty ? "\(parent)/\(baseName)" : baseName
+        label(name, in: card, x: 24, y: 10, w: 226, size: 13, weight: .medium)
+
+        let clock = label("", in: card, x: 250, y: 11, w: 114, size: 11,
                           color: session.state == "waiting" ? attentionColor : .secondaryLabelColor, mono: true)
         clock.alignment = .right
-        timeLabels[session.id] = clock
+        clock.stringValue = clockText(session)
+        clockLabels[session.id] = clock
+
         let model = cleanModel(session.model)
-        let duplicateName = currentSessions.filter { $0.dirName == session.dirName }.count > 1
-        let context = duplicateName ? URL(fileURLWithPath: session.cwd).deletingLastPathComponent().lastPathComponent : model
-        let providerModel = context.isEmpty ? session.provider.title : "\(session.provider.title) · \(context)"
-        label(providerModel, in: card, x: 12, y: 33, w: 308, size: 12, color: .secondaryLabelColor)
-        let arrow = NSImageView(frame: NSRect(x: 340, y: 34, width: 12, height: 12))
-        arrow.image = NSImage(systemSymbolName: canFocus ? "arrow.up.right" : "doc.on.doc", accessibilityDescription: nil)
-        arrow.contentTintColor = .tertiaryLabelColor
-        card.addSubview(arrow)
-        card.setAccessibilityLabel("\(canFocus ? "Open" : "Copy path for") \(name), \(providerModel)")
+        let context = session.state == "waiting" ? waitingSummary(session.detail) : model
+        let contextLine = context.isEmpty ? session.provider.title : "\(session.provider.title) · \(context)"
+        label(contextLine, in: card, x: 24, y: 33, w: 316, size: 12, color: .secondaryLabelColor)
+
+        let glyph = NSImageView(frame: NSRect(x: 352, y: 35, width: 12, height: 12))
+        glyph.image = NSImage(systemSymbolName: canFocus ? "arrow.up.forward" : "doc.on.clipboard",
+                              accessibilityDescription: nil)
+        glyph.contentTintColor = .secondaryLabelColor
+        card.addSubview(glyph)
+
+        let ask = session.state == "waiting" ? ", \(waitingSummary(session.detail))" : ""
+        let outcome = canFocus ? "Opens in \(session.terminal)." : "Copies the project path."
+        card.setAccessibilityLabel("\(name), \(session.provider.title) \(model), \(clockText(session))\(ask). \(outcome)")
+        card.toolTip = tooltip(session)
         focusButtons[session.id] = card
         sessionRows[session.id] = card
         return card

@@ -28,21 +28,22 @@ swift build -c release
 ```
 
 The menu bar button keeps the same beacon at a fixed square width with no text.
-The neutral template blinks slowly while working, flashes amber when input is needed,
-and turns green for 10 seconds
-after completion. Active colors are drawn into non-template artwork; idle uses a
-template with system tint (nil) for light/dark menu bar contrast.
-Counts and explicit state labels live in the tooltip and console. The attention timer
-smoothly varies between full/35% opacity over 1.4 seconds and stops immediately when waiting clears.
-Working alternates full/75% button opacity every 1.4 seconds; waiting takes priority
-and resets button opacity. Reduce Motion keeps both signals steady.
+Resting and working share one neutral template image so macOS handles light/dark
+contrast; the mark never changes shape. Working breathes by toggling the button's
+alpha between 1 and 0.75 every 1.4 seconds (`updateWorkingBreath`), which costs no
+redraw; idle is steady. A session that newly asks for input starts a finite flash
+(`AppDelegate.flashCycles` × `flashPeriod`, about two seconds) and then holds a
+steady `systemOrange`; there is no continuous pulse and no working blink. A fresh
+completion shows `systemGreen` for 10 seconds. Reduce Motion skips the flash.
+`updateButton` only regenerates the artwork when its descriptor changes.
 
-Needs input / Working / Idle are exclusive state tabs. Counts appear only in tabs;
-there is no summary strip, repeated group heading, or repeated row state. On opening,
-`prepareForPresentation` chooses needs input, then working, then idle. Waiting rows
-sort oldest first. Live refreshes never change selection or resize the open window.
-The viewport is calculated once per opening from the largest tab, capped at 420 points
-(and smaller screens). Overall maximum height is 548 points. The next opening can resize.
+The console has no tabs. `ConsoleSummary` builds the header headline and subline
+from counts; `consoleOrder` (CCBeaconCore) sorts waiting (oldest first), then
+working (oldest first), then idle (newest first). Waiting rows show
+`waitingSummary(session.detail)`, which the hook records from the Notification
+message (Claude) or the tool name and command (Codex). Live refreshes never resize
+the open window. The viewport is calculated once per opening from the row count,
+capped at 456 points of list (512 total). The next opening can resize.
 
 **Popover sizing contract:** all real openings go through `DashboardController.show`,
 which synchronizes `NSPopover.contentSize` before showing. AppKit caches this separately
@@ -55,9 +56,17 @@ The native CI checks exercise deferred layout, animated large/small/empty reopen
 focused-row removal, scroll restoration, and constrained content bounds.
 
 Rows are fixed at 64 points, with path and token usage in tooltips. The whole row
-opens the terminal (or copies the path for unsupported terminals). Arrow keys navigate
-rows and Return activates them. There are no expandable rows. Tabs retain their scroll positions;
-provider/model or parent-directory context distinguishes similarly named sessions.
+opens the terminal (or copies the path for unsupported terminals and shows "Copied"
+in the clock for 1.5 seconds). Arrow keys navigate rows and Return activates them.
+There are no expandable rows. Same-name projects show `parent/name`. The header's
+top right holds three captioned icon buttons (`HeaderIconButton`, image above a
+9-point caption): Awake/May sleep, Sounds/Muted, Quit (the version is the quit
+tooltip); there is no menu and no footer.
+
+**Keep awake:** `updateSleepAssertion(working:)` in AppDelegate holds an IOKit
+`PreventUserIdleSystemSleep` assertion while any session is working and `keepAwake`
+(UserDefaults, default true) is on; it releases immediately otherwise. The
+dashboard mirrors the preference through `keepAwake` / `onKeepAwake`.
 See DESIGN.md for product intent and the responsibilities of each UI element.
 
 Clicking opens a transient NSPopover with DashboardController. Native buttons support keyboard
@@ -70,8 +79,9 @@ To review the full console in light and dark appearances without installing hook
 .build/release/ccbeacon --ui-check
 ```
 
-These commands render mixed, empty, working, idle, and overflow fixtures and exercise
-native controls, live transitions, usage updates, and scrolling. Neither mode will
+These commands render mixed, asks, finished, empty, working, idle, and overflow
+fixtures plus the real popover, and exercise native controls, live transitions,
+usage updates, the finite flash, and scrolling. Neither mode will
 run the normal application launch or modify Claude settings.
 
 ## Test
@@ -83,7 +93,7 @@ bash -n ccbeacon.sh
 ```
 
 No testing framework required — runs with Command Line Tools alone (no Xcode needed).
-Tests cover: formatters (`fmtElapsed`, `fmtBarTime`, `fmtK`, `cleanModel`), `Session.priority`,
+Tests cover: formatters (`fmtElapsed`, `stateClock`, `waitingSummary`, `consoleOrder`, `fmtBarTime`, `fmtK`, `cleanModel`), `Session.priority`,
 `Session.dirName`, `processStartTime`, `readTokens` (incremental parsing, partial lines,
 truncation), and `loadSessions` (state resolution, staleness, PID recycling, sort order).
 
@@ -95,6 +105,14 @@ launch. It copies the bundled `ccbeacon.sh` to `~/.claude/hooks/` when contents 
 and merges any missing hook entries into `~/.claude/settings.json` via
 `mergedHookSettings()` in CCBeaconCore. Events that already contain a ccbeacon entry
 are never modified.
+
+Claude events: SessionStart → idle, UserPromptSubmit → working, PreToolUse → `resume`,
+Notification (permission_prompt, elicitation_dialog) → waiting, Stop/StopFailure → done,
+SessionEnd removes the file. `resume` is how a granted permission becomes "working"
+immediately: PreToolUse fires when the approved tool starts. Because it also fires
+for every other tool call, the shell exits before Python unless the session file
+currently says waiting. A repeated state keeps its `ts`, so clocks measure time in
+the current state.
 
 This lives in the app — NOT in the Homebrew formula — because `post_install` runs in
 Homebrew's sandbox with a fake `$HOME` and cannot write the user's real `~/.claude`.
@@ -184,5 +202,5 @@ git push
 - **Update timer runs in `.common` run-loop mode** — in `.default` mode timers stop firing
   during interaction.
 
-- **Version display:** the app version sits beneath ccbeacon in the header. There is
-  no visible development badge.
+- **Version display:** the app version is the quit button's tooltip. The header
+  shows state, never branding, and there is no visible development badge.

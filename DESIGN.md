@@ -1,38 +1,75 @@
-# ccbeacon: attention, then return to work
+# DESIGN.md
 
-The app answers two questions: does an agent need me, and where do I go to respond?
-It is a local monitor for Claude Code and Codex sessions, not a transcript viewer.
+# ccbeacon: does an agent need me, and where do I go?
 
-## Information hierarchy
+ccbeacon is a local monitor for Claude Code and Codex sessions, not a transcript
+viewer. Every surface answers those two questions first and stays out of the way
+otherwise. Mode: Operate. Native macOS conventions outrank expression.
 
-- The menu bar beacon signals urgency without taking extra space: amber flash for
-  input, slow neutral blink for work, a brief green completion cue, steady at idle.
-- Needs input / Working / Idle tabs are mutually exclusive. They own state names
-  and counts. Do not repeat those as a summary strip, group headings, or row labels.
-- A session row owns identity and action: project, provider, useful context, elapsed
-  time, and a whole-row terminal action. Time means time in the current state. Tooltips clarify this.
-- Rows use two lines in 64 points, separated by fine rules. Hover reveals path and usage.
-- Compact borderless state segments use a neutral selected fill and quiet counts.
-- A quiet sound toggle stays in the footer; Quit lives in the header settings menu.
-  The compact header keeps the version beneath the app name.
+## The signal
 
-## Navigation and updates
+- The menu bar beacon is calm. It signals state; it does not animate all day.
+  - Resting: the neutral template mark, steady.
+  - Working: the same mark breathing slowly (75% and back every 1.4 seconds). The
+    shape never changes; only opacity does.
+  - Needs input: orange. A session that newly asks for input earns three short
+    flashes (about two seconds), then the beacon holds steady orange until answered.
+  - Just finished: green for ten seconds, even while other sessions work.
+  - Reduce Motion removes the flash; every state is still readable by shape and color.
+- Sound is a soft ping for a request and Glass for completion, never an error alert.
+  Sounds can be turned off with the speaker button in the console header.
 
-Opening prioritizes Needs input, then Working, then Idle. Longest-waiting sessions
-come first. While open, respect the selected tab even as sessions change state.
-The attention tab's count and amber label reveal new requests without stealing focus.
-An empty tab explains its state once. The tabs provide state navigation.
+## One orange
 
-Keep the window frame fixed throughout an opening. Changes in counts, state, and tabs
-affect the scroll document. Reopening may choose a new size.
-Preserve per-tab scrolling and focused controls during clock and usage updates.
-The popover and dashboard must receive the same size at every opening. Keep the list's
-scroll hierarchy attached throughout the presentation. Header and footer positions come
-from actual content bounds, never a stale requested height.
+System orange carries "needs input" everywhere: the menu bar, the header beacon,
+the state dot, the clock, the headline. Light mode darkens it for text contrast;
+dark mode uses it as is. Green is completion, the accent color is working, neutral
+is idle. No other hue appears. All text uses system semantic colors; all fills are
+black or white at low opacity and double under Increase Contrast. The console root
+is clear so the popover's own material shows through.
+
+## The console
+
+The header is the answer. The beacon, lit by the top state, sits beside one
+sentence: "2 need input", "3 working", "All quiet", "Nothing running". The subline
+carries the rest of the counts, a just-finished project, or which integrations are
+being watched. Three quiet controls sit at the top right, each an icon with a
+caption beneath it in the Control Center idiom: Awake / May sleep, Sounds / Muted,
+Quit. The caption states the current mode, the icon echoes it. The version rides on
+the quit tooltip. There is no branding and no menu.
+
+While any session is working the app keeps the Mac from idle sleep (the display may
+still sleep). The Awake button turns this off (sun when on, moon when sleep is
+allowed). Its tooltip says whether the lock is currently held. A full-width hairline
+closes the header; the same hairline, inset to the text edge, separates rows.
+
+One list, one order: sessions that need input first (longest waiting at the top),
+then working (longest running first), then idle (most recent first). There are no
+tabs and no section headings; each row states its own state.
+
+A row is 64 points and two lines. Line one: a state dot (filled orange, filled
+accent, filled green, or a hollow ring), the project name, and a verb clock on the
+right ("waiting 2m", "working 35m", "idle 2h 1m"). Line two: the provider and, for a
+waiting session, what it is asking for ("Needs permission for Bash", "Waiting for
+your answer"); otherwise the model. Projects with the same folder name show their
+parent folder. The whole row is one button that opens the terminal or, for
+unsupported terminals, copies the path and says "Copied" in the clock. Hover shows
+the full path and token usage. Arrow keys move between rows; Return activates;
+keyboard focus draws the system focus ring.
+
+The empty state confirms readiness and which providers are watched.
+
+## Updates
+
+Keep the window frame fixed throughout an opening. Live changes affect only the
+scroll document and header text; scroll position and keyboard focus survive
+one-second refreshes. Reopening may choose a new size. The popover and dashboard
+must receive the same size at every opening.
 
 ## Verification
 
-Use mixed-provider fixtures, same-name projects, empty states, and overflow lists.
-Verify real popover anchoring, exclusive state membership, attention-first opening,
-live transitions, terminal actions, keyboard controls, and Reduce Motion behavior.
-View-only screenshots cannot prove native popover placement; capture native chrome too.
+Use mixed-provider fixtures, same-name projects, waiting rows with and without a
+recorded ask, a just-finished session, empty states, and overflow lists. Verify the
+finite flash, the steady working beacon, the completion cue, ordering, copy
+feedback, keyboard controls, and Reduce Motion. View-only screenshots cannot prove
+native popover placement or material; capture native chrome too.

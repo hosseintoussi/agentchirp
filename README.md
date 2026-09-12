@@ -14,32 +14,34 @@ ccbeacon sits in your menu bar and watches your active Claude Code and Codex ses
 
 | State | Menu bar |
 |-------|----------|
-| No active sessions | Beacon mark |
-| Sessions working | Slowly blinking beacon |
-| Needs your input | Flashing amber beacon |
+| No active sessions | Neutral beacon, steady |
+| Sessions working | Neutral beacon breathing slowly |
+| Needs your input | Three short orange flashes, then steady orange |
 | Just finished | Green beacon for 10 seconds |
 
-The icon keeps a fixed width in every state; hover for status and session counts.
-Click the icon to open the session console. **Needs input / Working / Idle** tabs
-show each state and its count once. Opening the console selects Needs input first,
-then Working, then Idle. Sessions waiting longest appear first.
+The icon keeps a fixed width in every state and never animates continuously; hover
+for counts. Click it to open the console. The header answers the question in one
+line ("2 need input", "3 working", "All quiet") with the beacon lit to match.
 
-Each two-line row identifies the project and provider and shows elapsed time. Click
-anywhere on the row to open its terminal; hover for the full path and token usage. Projects
-with the same folder name show their parent folder to help distinguish them.
+Below is one list: sessions that need input first (longest waiting at the top), then
+working (longest running first), then idle. Each row shows a state dot, the project,
+a clock that says what the time means ("waiting 2m", "working 35m"), and on the second
+line the provider and, when the agent is waiting, what it is asking for ("Needs
+permission for Bash", "Waiting for your answer"). Projects with the same folder name
+show their parent folder.
 
-Live updates move sessions into the correct tab without switching your selection
-or resizing the open popover. Rows have a fixed height and each tab remembers its
-scroll position. Close and reopen to jump to the highest-priority state.
+Click anywhere on a row to open its terminal; hover for the full path and token usage.
+Terminal jumps support iTerm2 and Terminal.app; other terminals copy the project path
+and the row says "Copied". Arrow keys move between rows, Return opens the selected
+session, Escape dismisses the popover. Live updates reorder the list in place without
+resizing the open popover.
 
-Terminal jumps support iTerm2 and Terminal.app. Unsupported terminals offer Copy path.
-Arrow keys navigate session rows and Return opens the selected session;
-Escape dismisses the popover. Sound preferences persist between launches. Quit lives
-in the header settings menu.
-
-The console follows your Mac's light or dark appearance. The neutral beacon blinks
-slowly while working; amber flashes faster when input is needed. Reduce Motion
-keeps both states steady.
+While any session is working, ccbeacon keeps your Mac from going to sleep (the
+display can still sleep). Three captioned buttons sit at the top right: Awake turns
+that off (it then reads May sleep), Sounds toggles sounds, Quit quits (hover it for
+the version).
+The console follows your Mac's light or dark appearance and Increase Contrast, and
+Reduce Motion removes the flash.
 
 ---
 

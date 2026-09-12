@@ -5,6 +5,7 @@ private let hookCommand = "~/.claude/hooks/ccbeacon.sh"
 private let desiredHooks: [(event: String, matcher: String?, state: String)] = [
     ("SessionStart",     nil,                   "idle"),
     ("UserPromptSubmit", nil,                   "working"),
+    ("PreToolUse",       nil,                   "resume"),
     ("Notification",     "permission_prompt",   "waiting"),
     ("Notification",     "elicitation_dialog",  "waiting"),
     ("Stop",             nil,                   "done"),
@@ -19,7 +20,7 @@ public func mergedHookSettings(_ settings: [String: Any]) -> [String: Any]? {
     var hooks = settings["hooks"] as? [String: Any] ?? [:]
     var changed = false
 
-    let events = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd"]
+    let events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop", "StopFailure", "SessionEnd"]
     for event in events {
         var entries = hooks[event] as? [[String: Any]] ?? []
         guard !entries.contains(where: { String(describing: $0).contains("ccbeacon") }) else { continue }
