@@ -22,7 +22,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var receivedInitialSnapshot = false
     private var sessions: [Session] = []
     private var waitingAlerts = WaitingAlerts()
+    private var completionAlerts = CompletionAlerts()
     var pendingWaits: [String: DispatchWorkItem] = [:]
+    var pendingCompletions: [String: DispatchWorkItem] = [:]
+    /// Long enough for a queued prompt to resume the session after its Stop.
+    static let completionDelay: TimeInterval = 1.5
     var isMuted = UserDefaults.standard.bool(forKey: "muted")
     /// Keep the Mac awake while any session is working (on unless the user turns it off).
     var keepAwake = UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true
@@ -194,6 +198,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func fireNotifications(_ sessions: [Session]) {
         let changes = notificationPolicy.update(sessions)
         waitingAlerts.reconcile(sessions)
+        completionAlerts.reconcile(sessions)
         for id in changes.cancelWaiting {
             pendingWaits.removeValue(forKey: id)?.cancel()
         }
@@ -215,7 +220,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             pendingWaits[sid] = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
         }
-        for _ in changes.completed { playSound("Glass") }
+        for session in changes.completed {
+            guard let ticket = completionAlerts.schedule(session) else { continue }
+            let sid = session.id
+            pendingCompletions.removeValue(forKey: sid)?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingCompletions.removeValue(forKey: sid)
+                if self.completionAlerts.consume(ticket) { self.playSound("Glass") }
+            }
+            pendingCompletions[sid] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.completionDelay, execute: work)
+        }
     }
 
     // Audio cue only — the visual "notification" is the menu bar icon changing state.

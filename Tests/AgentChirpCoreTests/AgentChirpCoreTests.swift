@@ -417,6 +417,31 @@ suite("Lifecycle and notification policy") {
     expect(orange == green, false, "orange and green cannot share an artwork descriptor")
 }
 
+suite("Completion debounce") {
+    func session(_ state: String, _ event: String, ts: TimeInterval = 100) -> Session {
+        Session(id: "job", state: state, ts: ts, cwd: "/tmp/job", transcriptPath: "", model: "", lastEvent: event)
+    }
+    var alerts = CompletionAlerts()
+    expect(alerts.schedule(session("working", "UserPromptSubmit")) == nil, true, "only an idle completion schedules a chime")
+    let finished = session("idle", "Stop")
+    let ticket = alerts.schedule(finished)!
+    alerts.reconcile([session("working", "UserPromptSubmit", ts: 100.2)])
+    expect(alerts.consume(ticket), false, "a prompt queued behind the Stop silences the chime")
+    let again = alerts.schedule(finished)!
+    alerts.reconcile([finished])
+    expect(alerts.consume(again), true, "an undisturbed completion sounds")
+    expect(alerts.consume(again), false, "a completion sounds at most once")
+    let old = alerts.schedule(finished)!
+    let newer = session("idle", "Stop", ts: 130)
+    let replacement = alerts.schedule(newer)!
+    alerts.reconcile([newer])
+    expect(alerts.consume(old), false, "a later completion supersedes the earlier ticket")
+    expect(alerts.consume(replacement), true, "the later completion sounds")
+    let gone = alerts.schedule(finished)!
+    alerts.reconcile([])
+    expect(alerts.consume(gone), false, "an ended session never chimes")
+}
+
 suite("Transcript replacement and retry") {
     let path = makeTmpDir("replacement") + "/transcript.jsonl"
     var offsets: [UInt64] = []

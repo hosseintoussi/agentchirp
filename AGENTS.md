@@ -243,6 +243,8 @@ uses injected actions and exercises real controls without touching user setup.
   and compares the observed bytes before deleting, so a refreshed state survives.
   The app also debounces "waiting" state for 8 seconds and checks transcript mtime
   before playing a sound. Alert tickets remain cancellable through asynchronous validation.
+  Completion sounds wait `AppDelegate.completionDelay` (1.5 s) through `CompletionAlerts` and are
+  dropped when a queued prompt resumes the session right after its Stop; the green cue is immediate.
   Codex question answers correlate by `tool_use_id`; permission requests have no
   approval-resolved event, so standalone permission signals are visual-only and keep-awake stays held
   through the pending interval until the turn becomes idle or ends.
