@@ -96,7 +96,7 @@ jobs:
           python3 -c 'import sys; sys.path.insert(0, "scripts"); from appcast import changelog; from package_app import version; print(changelog(version()))' > dist/release-notes.md
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.candidate.outputs.tag }}
           body_path: dist/release-notes.md
