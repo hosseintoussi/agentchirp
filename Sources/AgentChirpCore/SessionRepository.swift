@@ -44,19 +44,21 @@ public func removeSessionIfUnchanged(path: String, observed: Data, fileManager f
 /// Owns transcript caches. Confine each repository to one queue.
 public final class SessionRepository {
     private let environment: SessionEnvironment
-    private let tokens: TranscriptReader
+    private let transcripts: TranscriptReader
     public init(environment: SessionEnvironment = SessionEnvironment()) {
         self.environment = environment
-        tokens = TranscriptReader(fileManager: environment.fileManager)
+        transcripts = TranscriptReader(fileManager: environment.fileManager)
     }
 
     // MARK: - Loading
 
-    public func loadSessions(dir: String = sessionsDir, provider: AgentProvider = .claude, includeTokens: Bool = true) -> [Session] {
+    /// `readTranscripts` also enables interrupt detection; lifecycle validation before an
+    /// alert skips it because waiting state never depends on the transcript.
+    public func loadSessions(dir: String = sessionsDir, provider: AgentProvider = .claude, readTranscripts: Bool = true) -> [Session] {
         let fm = environment.fileManager
         let now = environment.now()
         guard let files = try? fm.contentsOfDirectory(atPath: dir) else {
-            tokens.evict(provider: provider, keeping: [])
+            transcripts.evict(provider: provider, keeping: [])
             return []
         }
 
@@ -68,7 +70,7 @@ public final class SessionRepository {
             else { return nil }
 
             let rawState = SessionState(rawValue: json["state"] as? String ?? "") ?? .unknown
-            let ts             = json["ts"]              as? TimeInterval ?? 0
+            var ts             = json["ts"]              as? TimeInterval ?? 0
             let transcriptPath = json["transcript_path"] as? String       ?? ""
 
             // If the session is "waiting" but the transcript has been written to since
@@ -79,6 +81,7 @@ public final class SessionRepository {
             let updatedAt = json["updated_at"] as? TimeInterval ?? ts
             guard updatedAt.isFinite, updatedAt >= 0 else { return nil }
             var state: SessionState
+            var lastEvent = json["last_event"] as? String ?? ""
             if provider == .claude, rawState == "waiting", !transcriptPath.isEmpty,
                let attrs = try? fm.attributesOfItem(atPath: transcriptPath),
                let mtime = attrs[.modificationDate] as? Date,
@@ -86,6 +89,12 @@ public final class SessionRepository {
                 state = "working"
             } else {
                 state = rawState
+            }
+            let transcript = readTranscripts ? transcripts.read(transcriptPath, provider: provider) : TranscriptSummary()
+            // Escape ends a Claude turn without any hook. The transcript's interrupt marker,
+            // written after the last hook, is the only evidence the session is idle again.
+            if provider == .claude, state == "working", let interruptedAt = transcript.interruptedAt, interruptedAt > updatedAt {
+                state = "idle"; ts = interruptedAt; lastEvent = SessionEvent.interrupt.rawValue
             }
 
             let storedPid = json[provider == .codex ? "agent_pid" : "claude_pid"] as? Int ?? 0
@@ -141,22 +150,17 @@ public final class SessionRepository {
                 return nil
             }
 
-            let tok = includeTokens ? tokens.read(transcriptPath, provider: provider) : TokenUsage()
             return Session(
                 id:             (provider == .codex ? "codex:" : "") + (json["session_id"] as? String ?? file),
                 state:          state.rawValue,
                 ts:             ts,
                 cwd:            json["cwd"]           as? String ?? "",
                 transcriptPath: transcriptPath,
-                totalTokens:    tok.input + tok.output + tok.cache,
-                inputTokens:    tok.input,
-                outputTokens:   tok.output,
-                cacheTokens:    tok.cache,
-                model:          tok.model.isEmpty ? (json["model"] as? String ?? "") : tok.model,
+                model:          transcript.model.isEmpty ? (json["model"] as? String ?? "") : transcript.model,
                 tty:            json["tty"]           as? String ?? "",
                 terminal:       json["terminal"]      as? String ?? "",
                 provider:       provider,
-                lastEvent:      json["last_event"] as? String ?? "",
+                lastEvent:      lastEvent,
                 detail:         state == "waiting" ? (json["detail"] as? String ?? "") : "",
                 transcriptModifiedAt: (try? fm.attributesOfItem(atPath: transcriptPath)[.modificationDate] as? Date)?.timeIntervalSince1970,
                 codexServerBacked: provider == .codex && (json["codex_server_backed"] as? Bool
@@ -165,7 +169,7 @@ public final class SessionRepository {
         }
 
         let paths = Set(sessions.map { $0.transcriptPath })
-        if includeTokens { tokens.evict(provider: provider, keeping: paths) }
+        if readTranscripts { transcripts.evict(provider: provider, keeping: paths) }
 
         // Secondary keys keep the order stable across rebuilds — Swift's sort is not
         // stable, and the menu is rebuilt every second.
@@ -223,7 +227,7 @@ public final class SessionStore {
     public func validateWaiting(_ request: Session, receive: @escaping (Session?) -> Void) {
         queue.async {
             let directory = request.provider == .claude ? self.claudeDirectory : self.codexDirectory
-            let hooks = self.repository.loadSessions(dir: directory, provider: request.provider, includeTokens: false)
+            let hooks = self.repository.loadSessions(dir: directory, provider: request.provider, readTranscripts: false)
             let sessions = request.provider == .codex
                 ? self.runtimeOverlay.merge(hooks, runtime: self.runtime?.read(), clients: AgentProcessSnapshot.read()?.codexClients()) : hooks
             let current = sessions.first { $0.id == request.id }

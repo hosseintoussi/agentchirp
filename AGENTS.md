@@ -11,11 +11,11 @@ Sources/
     Core.swift      Session model, formatters, process liveness
     SessionPolicy.swift Typed state/event/outcome, notifications, beacon and row descriptors
     SessionRepository.swift Session loading, synchronized cleanup, background SessionStore
-    TranscriptReader.swift Shared incremental JSONL transport with owned provider caches
+    TranscriptReader.swift Shared incremental JSONL transport: model name and Claude interrupt marker
     ConsoleSummary.swift Pure header presentation
     IntegrationInstaller.swift Shared atomic executable/hook installation with observable errors
     HookAdapter.swift Native Claude/Codex hook transport, locking and ancestry
-    CodexTokens.swift Incremental Codex cumulative token adapter
+    CodexTranscript.swift Codex model name from turn_context records
     AgentProcessSnapshot.swift Bounded process discovery, ancestry, Codex terminal clients
     Version.swift   appVersion constant + isDevBuild detection (path-based)
   agentchirp-hook/    Native hook executable (no AppKit, no Python runtime)
@@ -72,7 +72,7 @@ scroll hierarchy. Clamp restored offsets to both ends after focus restoration.
 The native CI checks exercise deferred layout, animated large/small/empty reopen cycles,
 focused-row removal, scroll restoration, and constrained content bounds.
 
-Rows are fixed at 64 points, with path and token usage in tooltips. The whole row
+Rows are fixed at 64 points, with the path in tooltips. The whole row
 opens the terminal when available; unsupported or undetected terminals have no row
 action or action icon. Arrow keys navigate rows and Return activates them.
 There are no expandable rows. Same-name projects show `parent/name`. The header's
@@ -87,7 +87,7 @@ dashboard mirrors the preference through `keepAwake` / `onKeepAwake`.
 See DESIGN.md for product intent and the responsibilities of each UI element.
 
 Clicking opens a transient NSPopover with DashboardController. Native buttons support keyboard
-navigation. State changes rebuild grouped rows, while clock/token ticks update labels in place.
+navigation. State changes rebuild grouped rows, while clock ticks update labels in place.
 
 To review the full console in light and dark appearances without installing hooks:
 
@@ -118,9 +118,10 @@ dist/AgentChirp.app/Contents/MacOS/agentchirp --installation-check /tmp/agentchi
 ```
 
 No testing framework required — runs with Command Line Tools alone (no Xcode needed).
-Tests cover: formatters (`fmtElapsed`, `stateClock`, `waitingSummary`, `consoleOrder`, `fmtBarTime`, `fmtK`, `cleanModel`), `Session.priority`,
-`Session.dirName`, `processStartTime`, `readTokens` (incremental parsing, partial lines,
-truncation), and `loadSessions` (state resolution, staleness, PID recycling, sort order).
+Tests cover: formatters (`fmtElapsed`, `stateClock`, `waitingSummary`, `consoleOrder`, `fmtBarTime`, `cleanModel`), `Session.priority`,
+`Session.dirName`, `processStartTime`, `readTranscript` (incremental parsing, partial lines,
+truncation, interrupt markers), `loadSessions` (state resolution, staleness, PID recycling,
+interrupt resolution, sort order), and the native Claude hook adapter (question kinds, subagent calls).
 
 ## Hook script setup (required to see sessions)
 
@@ -133,15 +134,32 @@ merges any missing hook entries into `~/.claude/settings.json` via
 `mergedHookSettings()` in AgentChirpCore. Events that already contain a agentchirp entry
 are never modified.
 
-Claude events: SessionStart → idle, UserPromptSubmit → working, PreToolUse → `resume`,
-Notification (permission_prompt, elicitation_dialog) → waiting, Stop/StopFailure → done,
-SessionEnd removes the file. `resume` is how a granted permission becomes "working"
-immediately: PreToolUse fires when the approved tool starts. Because it also fires
-for every other tool call, the shell exits before launching the native helper unless the session file
-currently says waiting; the writer rechecks under the lock before resuming. A repeated
+Claude events: SessionStart → idle, UserPromptSubmit → working, PermissionRequest and
+Notification (permission_prompt, elicitation_dialog) → waiting, PreToolUse and PostToolUse
+→ `resume`, Stop/StopFailure → done, SessionEnd removes the file. Claude Code runs
+PreToolUse *before* the permission prompt and never again after approval, and it has no
+approval-resolved hook; `resume` therefore ends a wait at the approved tool's PostToolUse
+or at the next tool call, and the app's transcript-mtime check covers the gap. Because
+both resume events fire for every tool call, the shell exits before launching the native
+helper unless the session file currently says waiting; the writer rechecks under the lock
+before resuming. PermissionRequest fires immediately, about six seconds before the
+permission_prompt notification, and is the only event that identifies the request: the
+helper stores a SHA-256 fingerprint of tool name and input (identical in PostToolUse) in
+`pending_tools`, its generic kind in `pending_kinds` (`AskUserQuestion` → `input`, which a
+later notification must not demote) and its owner in `pending_agents` (`agent_id`, empty for
+the main thread). PostToolUse resumes only the matching request; PreToolUse resolves every
+request owned by the calling agent, so a parallel sibling's completion or a subagent's tool
+call never clears someone else's prompt. Records without fingerprints (notification-only
+hook sets) resume on any main-thread step. Headless `claude -p` runs fire PermissionRequest
+and then deny without a prompt, so they can show a brief wait. A repeated
 state keeps its `ts`, so clocks measure time in the current state. Hooks persist
-`last_event`; only Stop is successful completion. Startup, StopFailure, and Interrupt
-never produce a completion sound or green tint.
+`last_event`; only Stop is successful completion, and a Stop whose `background_tasks`
+lists a running `subagent` is recorded as still working (`background_subagents`): the main
+agent resumes when the result arrives, and the Stop after that sounds once. Background
+shells never defer completion. Subagents fire SubagentStop, which is not hooked. Startup, StopFailure, and Interrupt
+never produce a completion sound or green tint. Escape fires no hook: `loadSessions`
+resolves a working Claude session to idle (`last_event` Interrupt, clock from the marker)
+when the transcript's `[Request interrupted by user…]` entry is newer than `updated_at`.
 Hooks also persist `updated_at` for process liveness; never use the display clock
 as the latest hook time. A changed owner discards the previous turn and pending requests.
 
@@ -161,8 +179,8 @@ make approval or continuation decisions.
 `loadAllSessions()` combines Claude and Codex directories. Codex IDs are namespaced,
 PID metadata uses `agent_pid`, and provider-specific transcript caches remain separate.
 Codex waiting state is driven by hooks or live shared-server status, never transcript mtime. `Interrupt` suppresses
-success sounds and the green completion tint. `CodexTokens.swift` treats token counts as cumulative
-and cached input as a subset of input. Its JSONL parser is best-effort because Codex
+success sounds and the green completion tint. `CodexTranscript.swift` reads only the model
+name from `turn_context` records. Its JSONL parser is best-effort because Codex
 transcripts are not a stable API. Session state must not depend on that parser.
 
 Python hook tests use temporary directories only. UI snapshots include mixed providers.
@@ -225,6 +243,8 @@ uses injected actions and exercises real controls without touching user setup.
   and compares the observed bytes before deleting, so a refreshed state survives.
   The app also debounces "waiting" state for 8 seconds and checks transcript mtime
   before playing a sound. Alert tickets remain cancellable through asynchronous validation.
+  Completion sounds wait `AppDelegate.completionDelay` (1.5 s) through `CompletionAlerts` and are
+  dropped when a queued prompt resumes the session right after its Stop; the green cue is immediate.
   Codex question answers correlate by `tool_use_id`; permission requests have no
   approval-resolved event, so standalone permission signals are visual-only and keep-awake stays held
   through the pending interval until the turn becomes idle or ends.
@@ -245,9 +265,10 @@ uses injected actions and exercises real controls without touching user setup.
   only a fallback for missing owner PIDs. Claude
   always starts before its first hook fires, so a later start time means the PID was reused.
 
-- **Incremental transcript parsing:** `readTokens` caches a byte offset per transcript and
-  parses only appended complete lines. Never re-read whole transcripts on the update tick —
-  they can be tens of MB. `SessionStore` coalesces refreshes on a serial background queue
+- **Incremental transcript parsing:** `TranscriptReader` caches a byte offset per transcript and
+  parses only appended complete lines, keeping just the model name and the latest Claude
+  interrupt marker (Claude Code writes one line per content block, so nothing is summed).
+  Never re-read whole transcripts on the update tick — they can be tens of MB. `SessionStore` coalesces refreshes on a serial background queue
   and publishes snapshots to the main queue. UI actions consume that snapshot. Each
   repository owns its caches; inode changes, shrinkage, and equal-size rewrites reset
   parsing, and failed reads leave metadata uncommitted so the next refresh retries.

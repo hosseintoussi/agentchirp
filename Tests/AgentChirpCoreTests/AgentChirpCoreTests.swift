@@ -35,11 +35,18 @@ private func makeTmpDir(_ name: String) -> String {
     return dir
 }
 
-private func assistantLine(_ input: Int, _ output: Int, model: String) -> String {
-    "{\"type\":\"assistant\",\"message\":{\"model\":\"\(model)\",\"usage\":" +
-    "{\"input_tokens\":\(input),\"output_tokens\":\(output)," +
-    "\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":2}}}\n"
+private func assistantLine(model: String, block: String = "text") -> String {
+    "{\"type\":\"assistant\",\"timestamp\":\"2026-09-13T12:00:00.000Z\",\"message\":{\"model\":\"\(model)\"," +
+    "\"content\":[{\"type\":\"\(block)\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n"
 }
+
+private func interruptLine(at timestamp: String = "2026-09-13T12:00:44.169Z", text: String = "[Request interrupted by user]") -> String {
+    "{\"type\":\"user\",\"timestamp\":\"\(timestamp)\",\"message\":{\"role\":\"user\"," +
+    "\"content\":[{\"type\":\"text\",\"text\":\"\(text)\"}]}}\n"
+}
+
+/// 2026-09-13T12:00:44.169Z as the hooks' epoch clock.
+private let interruptEpoch: TimeInterval = 1_789_300_844.169
 
 private func append(_ text: String, to path: String) {
     let fh = FileHandle(forWritingAtPath: path)!
@@ -99,8 +106,7 @@ suite("waitingSummary") {
 suite("consoleOrder") {
     let now: TimeInterval = 1_000_000
     func s(_ id: String, _ state: String, _ age: TimeInterval) -> Session {
-        Session(id: id, state: state, ts: now - age, cwd: "/tmp/\(id)", transcriptPath: "",
-                totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "")
+        Session(id: id, state: state, ts: now - age, cwd: "/tmp/\(id)", transcriptPath: "", model: "")
     }
     let ordered = consoleOrder([s("idle-old", "idle", 900), s("work-new", "working", 10), s("wait-new", "waiting", 5),
                                 s("wait-old", "waiting", 300), s("work-old", "working", 600), s("idle-new", "idle", 30),
@@ -122,16 +128,6 @@ suite("fmtBarTime") {
     expect(fmtBarTime(172800), "2d",  "172800s → 2d")
 }
 
-suite("fmtK") {
-    expect(fmtK(0),         "0",      "0")
-    expect(fmtK(999),       "999",    "999")
-    expect(fmtK(1_000),     "1.0k",   "1k")
-    expect(fmtK(1_500),     "1.5k",   "1.5k")
-    expect(fmtK(12_345),    "12.3k",  "12.3k")
-    expect(fmtK(1_000_000), "1.00M",  "1M")
-    expect(fmtK(2_500_000), "2.50M",  "2.5M")
-}
-
 suite("cleanModel") {
     expect(cleanModel("claude-sonnet-4-5"), "sonnet-4-5", "strips claude- prefix")
     expect(cleanModel("claude-haiku-3-5"),  "haiku-3-5",  "strips claude- prefix")
@@ -142,8 +138,7 @@ suite("cleanModel") {
 
 suite("Session.priority") {
     func s(_ state: String) -> Session {
-        Session(id: "x", state: state, ts: 0, cwd: "/", transcriptPath: "",
-                totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "")
+        Session(id: "x", state: state, ts: 0, cwd: "/", transcriptPath: "", model: "")
     }
     expect(s("waiting").priority, 3, "waiting = 3")
     expect(s("working").priority, 2, "working = 2")
@@ -158,8 +153,7 @@ suite("Session.priority") {
 
 suite("Session.dirName") {
     func s(_ cwd: String) -> Session {
-        Session(id: "x", state: "working", ts: 0, cwd: cwd, transcriptPath: "",
-                totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "")
+        Session(id: "x", state: "working", ts: 0, cwd: cwd, transcriptPath: "", model: "")
     }
     expect(s("/Users/alice/code/myproject").dirName, "myproject", "last path component")
     expect(s("/Users/alice/code/my-app").dirName,    "my-app",    "hyphenated name")
@@ -175,55 +169,63 @@ suite("processStartTime") {
     expect(processStartTime(pid_t(spawnDeadPid())) == nil, true, "dead pid → nil")
 }
 
-suite("readTokens") {
+suite("readTranscript") {
     let dir = makeTmpDir("transcripts")
     let t   = dir + "/session.jsonl"
-    try! (assistantLine(10, 5, model: "claude-a")
+    try! (assistantLine(model: "claude-a", block: "thinking") + assistantLine(model: "claude-a", block: "tool_use")
         + "{\"type\":\"user\"}\n"
-        + assistantLine(20, 7, model: "claude-b")).write(toFile: t, atomically: true, encoding: .utf8)
+        + assistantLine(model: "claude-b")).write(toFile: t, atomically: true, encoding: .utf8)
 
-    var r = readTokens(t)
-    expect(r.input,  30, "sums input across entries")
-    expect(r.output, 12, "sums output across entries")
-    expect(r.cache,  6,  "sums cache creation + read")
-    expect(r.model,  "claude-b", "model is the most recent entry")
+    var r = readTranscript(t)
+    expect(r.model, "claude-b", "model is the most recent entry")
+    expect(r.interruptedAt == nil, true, "regular traffic is not an interruption")
 
     // Incremental: only the appended tail is parsed on the next call.
-    append(assistantLine(1, 1, model: "claude-c"), to: t)
-    r = readTokens(t)
-    expect(r.input, 31, "appended entry counted incrementally")
+    append(assistantLine(model: "claude-c"), to: t)
+    r = readTranscript(t)
     expect(r.model, "claude-c", "model updates on append")
 
     // A partial trailing line (mid-append) is ignored until completed.
-    let full  = assistantLine(100, 100, model: "claude-d")
+    let full  = interruptLine()
     let split = full.index(full.startIndex, offsetBy: 40)
     append(String(full[..<split]), to: t)
-    r = readTokens(t)
-    expect(r.input, 31, "partial trailing line not counted")
+    r = readTranscript(t)
+    expect(r.interruptedAt == nil, true, "partial trailing line not parsed")
     append(String(full[split...]), to: t)
-    r = readTokens(t)
-    expect(r.input, 131, "completed line counted on next read")
+    r = readTranscript(t)
+    expect(r.interruptedAt ?? 0, interruptEpoch, "completed interrupt marker is dated from the entry timestamp")
+    expect(r.model, "claude-c", "interruption keeps the model")
+
+    append(interruptLine(at: "2026-09-13T12:01:00Z", text: "[Request interrupted by user for tool use]"), to: t)
+    expect(readTranscript(t).interruptedAt ?? 0, interruptEpoch + 15.831, "tool-use interruptions count and whole-second timestamps parse")
+    append(assistantLine(model: "claude-c"), to: t)
+    expect(readTranscript(t).interruptedAt == nil, true, "assistant output after the marker clears the interruption")
+    append("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[Request interrupted by user] is what I typed\"}}\n", to: t)
+    expect(readTranscript(t).interruptedAt == nil, true, "typed prompts are never interruption markers")
 
     // Truncation/replacement resets the cache and reparses from scratch.
-    try! assistantLine(3, 4, model: "claude-e").write(toFile: t, atomically: true, encoding: .utf8)
-    r = readTokens(t)
-    expect(r.input,  3, "truncated file reparsed from scratch")
+    try! assistantLine(model: "claude-e").write(toFile: t, atomically: true, encoding: .utf8)
+    r = readTranscript(t)
     expect(r.model,  "claude-e", "model reset after truncation")
 
-    expect(readTokens("").input, 0, "empty path → zeros")
-    expect(readTokens(dir + "/missing.jsonl").input, 0, "missing file → zeros")
+    expect(readTranscript("").model, "", "empty path → empty summary")
+    expect(readTranscript(dir + "/missing.jsonl").model, "", "missing file → empty summary")
 }
 
 suite("mergedHookSettings") {
-    // Empty settings → all seven events added.
+    // Empty settings → all nine events added.
     let fresh = mergedHookSettings([:])
     expect(fresh != nil, true, "empty settings gains hooks")
     let freshHooks = fresh?["hooks"] as? [String: Any] ?? [:]
     expect(freshHooks.keys.sorted().joined(separator: ","),
-           "Notification,PreToolUse,SessionEnd,SessionStart,Stop,StopFailure,UserPromptSubmit",
-           "all seven events configured")
+           "Notification,PermissionRequest,PostToolUse,PreToolUse,SessionEnd,SessionStart,Stop,StopFailure,UserPromptSubmit",
+           "all nine events configured")
     expect(String(describing: freshHooks["PreToolUse"] ?? "").contains("agentchirp.sh resume"), true,
            "PreToolUse resumes a waiting session")
+    expect(String(describing: freshHooks["PostToolUse"] ?? "").contains("agentchirp.sh resume"), true,
+           "PostToolUse resumes after an approved tool completes")
+    expect(String(describing: freshHooks["PermissionRequest"] ?? "").contains("agentchirp.sh waiting"), true,
+           "PermissionRequest marks waiting as soon as the prompt appears")
     expect((freshHooks["Notification"] as? [[String: Any]])?.count ?? 0, 2,
            "Notification gets both matchers")
 
@@ -304,6 +306,30 @@ suite("loadSessions") {
     expect(loadSessions(dir: dir5).map { $0.id }.joined(separator: ","),
            "waiter,new-work,old-work", "sort: priority desc, then ts desc")
 
+    // Escape fires no hook: a transcript interrupt marker newer than the last hook ends the turn.
+    let dir6 = makeTmpDir("sessions-6")
+    let interrupted = dir6 + "/interrupted.jsonl"
+    try! (assistantLine(model: "claude-x") + interruptLine()).write(toFile: interrupted, atomically: true, encoding: .utf8)
+    func writeWorking(_ id: String, updated: TimeInterval) {
+        let obj: [String: Any] = ["state": "working", "ts": interruptEpoch - 60, "updated_at": updated, "session_id": id,
+                                  "cwd": "/tmp/proj", "transcript_path": interrupted, "claude_pid": oldAlivePid, "last_event": "UserPromptSubmit"]
+        try! JSONSerialization.data(withJSONObject: obj).write(to: URL(fileURLWithPath: dir6 + "/\(id).json"))
+    }
+    writeWorking("stopped", updated: interruptEpoch - 60)
+    writeWorking("reprompted", updated: interruptEpoch + 30)
+    let repo6 = SessionRepository(environment: SessionEnvironment(now: { interruptEpoch + 100 }, processIsDead: { _, _ in false }))
+    sessions = repo6.loadSessions(dir: dir6)
+    let stopped = sessions.first { $0.id == "stopped" }
+    expect(stopped?.state ?? "", "idle", "interrupt after the last hook resolves working to idle")
+    expect(stopped?.ts ?? 0, interruptEpoch, "idle clock starts at the interruption")
+    expect(stopped?.lastEvent ?? "", "Interrupt", "interruption is not a completion")
+    expect(stopped?.finished(within: 10, now: interruptEpoch + 1) ?? true, false, "no green cue for an interrupted turn")
+    expect(stopped?.needsKeepAwake ?? true, false, "interrupted session releases keep awake")
+    expect(stopped?.model ?? "", "claude-x", "model still comes from the transcript")
+    expect(sessions.first { $0.id == "reprompted" }?.state ?? "", "working", "a prompt after the interruption is working again")
+    expect(repo6.loadSessions(dir: dir6, readTranscripts: false).first { $0.id == "stopped" }?.state ?? "", "working",
+           "alert validation does not read transcripts")
+
     expect(loadSessions(dir: tmpRoot + "/does-not-exist").count, 0, "missing dir → empty")
 }
 
@@ -327,33 +353,18 @@ suite("Codex integration") {
     let entry = (quoted["Stop"] as! [[String: Any]])[0]["hooks"] as! [[String: Any]]
     expect((entry[0]["command"] as! String).contains("'\"'\"'"), true, "escapes apostrophes in custom home")
 
-    let dir = makeTmpDir("codex-tokens")
+    let dir = makeTmpDir("codex-transcript")
     let path = dir + "/rollout.jsonl"
-    func count(_ input: Int, _ cached: Int, _ output: Int) -> String {
-        let obj: [String: Any] = ["type": "event_msg", "payload": ["type": "token_count", "info": ["total_token_usage":
-            ["input_tokens": input, "cached_input_tokens": cached, "output_tokens": output]]]]
-        return String(data: try! JSONSerialization.data(withJSONObject: obj), encoding: .utf8)! + "\n"
-    }
-    try! ("{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-test\"}}\n" + count(100, 60, 20) + count(100, 60, 20))
-        .write(toFile: path, atomically: true, encoding: .utf8)
-    var tokens = readCodexTokens(path)
-    expect(tokens.input, 40, "Codex input excludes cached tokens")
-    expect(tokens.cache, 60, "Codex cache is counted once")
-    expect(tokens.output, 20, "duplicate cumulative token records are not summed")
-    expect(tokens.model, "gpt-test", "model from turn context")
-    append(count(200, 100, 30), to: path)
-    tokens = readCodexTokens(path)
-    expect(tokens.input + tokens.cache + tokens.output, 230, "incremental cumulative totals")
-    let partial = count(300, 150, 40)
-    append(String(partial.dropLast()), to: path)
-    expect(readCodexTokens(path).output, 30, "partial Codex JSONL waits for newline")
-    append("\n", to: path)
-    expect(readCodexTokens(path).output, 40, "completed Codex record parsed")
-    try! count(10, 30, 2).write(toFile: path, atomically: true, encoding: .utf8)
-    tokens = readCodexTokens(path)
-    expect(tokens.input, 0, "cached input clamped to total input")
-    expect(tokens.output, 2, "replacement resets Codex cache")
-    expect(readCodexTokens("").input, 0, "missing transcript tolerated")
+    try! "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-test\"}}\n".write(toFile: path, atomically: true, encoding: .utf8)
+    expect(readTranscript(path, provider: .codex).model, "gpt-test", "model from turn context")
+    append("{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-", to: path)
+    expect(readTranscript(path, provider: .codex).model, "gpt-test", "partial Codex JSONL waits for newline")
+    append("next\"}}\n", to: path)
+    expect(readTranscript(path, provider: .codex).model, "gpt-next", "completed Codex record parsed")
+    expect(readTranscript(path, provider: .codex).interruptedAt == nil, true, "Codex lifecycle never depends on transcript parsing")
+    expect(readTranscript("", provider: .codex).model, "", "missing transcript tolerated")
+    try! "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".write(toFile: path, atomically: true, encoding: .utf8)
+    expect(readTranscript(path, provider: .codex).model, "", "replacement resets the model")
 
     let claudeDir = makeTmpDir("mixed-claude"), codexDir = makeTmpDir("mixed-codex")
     let now = Date().timeIntervalSince1970
@@ -381,8 +392,7 @@ suite("Codex integration") {
 
 suite("Lifecycle and notification policy") {
     func session(_ state: String, _ event: String, ts: TimeInterval = 995) -> Session {
-        Session(id: "test", state: state, ts: ts, cwd: "/tmp/test", transcriptPath: "",
-                totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", lastEvent: event)
+        Session(id: "test", state: state, ts: ts, cwd: "/tmp/test", transcriptPath: "", model: "", lastEvent: event)
     }
     for event in ["SessionStart", "StopFailure", "Interrupt", ""] {
         expect(session("idle", event).finished(within: 10, now: 1000), false, "\(event) never celebrates completion")
@@ -396,12 +406,40 @@ suite("Lifecycle and notification policy") {
     _ = policy.update([session("working", "UserPromptSubmit")])
     expect(policy.update([session("idle", "Stop")]).completed.count, 1, "successful transition sounds once")
     expect(policy.update([session("idle", "Stop")]).completed.count, 0, "repeated completion is silent")
+    _ = policy.update([session("working", "UserPromptSubmit")])
+    expect(policy.update([session("working", "Stop")]).completed.count, 0, "yielding to a background subagent is silent")
+    expect(policy.update([session("idle", "Stop", ts: 996)]).completed.count, 1, "the Stop after the subagent sounds once")
     expect(policy.update([session("waiting", "Notification")]).waiting.count, 1, "new waiting schedules a ping")
     expect(policy.update([]).cancelWaiting.contains("test"), true, "removed sessions cancel pending pings")
     let completed = session("idle", "Stop")
     let orange = BeaconDescriptor(sessions: [session("waiting", "Notification"), completed], now: 1000)
     let green = BeaconDescriptor(sessions: [completed], now: 1000)
     expect(orange == green, false, "orange and green cannot share an artwork descriptor")
+}
+
+suite("Completion debounce") {
+    func session(_ state: String, _ event: String, ts: TimeInterval = 100) -> Session {
+        Session(id: "job", state: state, ts: ts, cwd: "/tmp/job", transcriptPath: "", model: "", lastEvent: event)
+    }
+    var alerts = CompletionAlerts()
+    expect(alerts.schedule(session("working", "UserPromptSubmit")) == nil, true, "only an idle completion schedules a chime")
+    let finished = session("idle", "Stop")
+    let ticket = alerts.schedule(finished)!
+    alerts.reconcile([session("working", "UserPromptSubmit", ts: 100.2)])
+    expect(alerts.consume(ticket), false, "a prompt queued behind the Stop silences the chime")
+    let again = alerts.schedule(finished)!
+    alerts.reconcile([finished])
+    expect(alerts.consume(again), true, "an undisturbed completion sounds")
+    expect(alerts.consume(again), false, "a completion sounds at most once")
+    let old = alerts.schedule(finished)!
+    let newer = session("idle", "Stop", ts: 130)
+    let replacement = alerts.schedule(newer)!
+    alerts.reconcile([newer])
+    expect(alerts.consume(old), false, "a later completion supersedes the earlier ticket")
+    expect(alerts.consume(replacement), true, "the later completion sounds")
+    let gone = alerts.schedule(finished)!
+    alerts.reconcile([])
+    expect(alerts.consume(gone), false, "an ended session never chimes")
 }
 
 suite("Transcript replacement and retry") {
@@ -416,20 +454,20 @@ suite("Transcript replacement and retry") {
         try handle.seek(toOffset: offset)
         return try handle.readToEnd() ?? Data()
     })
-    try! assistantLine(111, 1, model: "a").write(toFile: path, atomically: true, encoding: .utf8)
-    expect(reader.read(path, provider: .claude).input, 111, "initial usage")
-    try! assistantLine(999, 1, model: "b").write(toFile: path, atomically: true, encoding: .utf8)
-    expect(reader.read(path, provider: .claude).input, 999, "equal-size replacement resets usage")
-    try! (assistantLine(200, 1, model: "c") + assistantLine(300, 1, model: "c")).write(toFile: path, atomically: true, encoding: .utf8)
-    expect(reader.read(path, provider: .claude).input, 500, "larger replacement resets usage")
+    try! assistantLine(model: "a").write(toFile: path, atomically: true, encoding: .utf8)
+    expect(reader.read(path, provider: .claude).model, "a", "initial summary")
+    try! assistantLine(model: "b").write(toFile: path, atomically: true, encoding: .utf8)
+    expect(reader.read(path, provider: .claude).model, "b", "equal-size replacement resets the summary")
+    try! (assistantLine(model: "c") + interruptLine()).write(toFile: path, atomically: true, encoding: .utf8)
+    expect(reader.read(path, provider: .claude).interruptedAt ?? 0, interruptEpoch, "larger replacement is reparsed")
     let before = offsets.count
     _ = reader.read(path, provider: .claude)
     expect(offsets.count, before, "unchanged transcript performs no read")
     let size = (try! FileManager.default.attributesOfItem(atPath: path)[.size] as! NSNumber).uint64Value
-    append(assistantLine(1, 1, model: "c"), to: path)
+    append(assistantLine(model: "d"), to: path)
     failNext = true
-    expect(reader.read(path, provider: .claude).input, 500, "failed tail read preserves prior totals")
-    expect(reader.read(path, provider: .claude).input, 501, "unchanged metadata after failure is retried")
+    expect(reader.read(path, provider: .claude).interruptedAt ?? 0, interruptEpoch, "failed tail read preserves the prior summary")
+    expect(reader.read(path, provider: .claude).model, "d", "unchanged metadata after failure is retried")
     expect(offsets.last!, size, "append reads from consumed byte offset")
 }
 
@@ -489,7 +527,7 @@ suite("Integration installation") {
 suite("Background session store") {
     let dir = makeTmpDir("background-store")
     let transcript = dir + "/large.jsonl"
-    let line = assistantLine(1, 1, model: "fixture")
+    let line = assistantLine(model: "fixture")
     let large = String(repeating: line, count: 100_000)
     try! large.write(toFile: transcript, atomically: true, encoding: .utf8)
     writeSession(dir: dir, id: "large", state: "working", ts: Date().timeIntervalSince1970, pid: Int(getpid()), transcript: transcript)
@@ -502,7 +540,7 @@ suite("Background session store") {
         store.refresh { sessions in
             expect(Thread.isMainThread, true, "snapshot delivered on main thread")
             expect(mainTaskRan, true, "main queue remains responsive during initial parsing")
-            expect(sessions.first?.inputTokens ?? 0, 100_000, "background snapshot has complete totals")
+            expect(sessions.first?.model ?? "", "fixture", "background snapshot has parsed the whole transcript")
             deliveries += 1
         }
     }
@@ -518,8 +556,7 @@ suite("Background session store") {
 
 suite("Answered requests and Codex keep awake") {
     func session(_ state: String, ts: TimeInterval = 100, detail: String = "input", provider: AgentProvider = .codex) -> Session {
-        Session(id: "question", state: state, ts: ts, cwd: "/tmp", transcriptPath: "", totalTokens: 0,
-                inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: provider, detail: detail)
+        Session(id: "question", state: state, ts: ts, cwd: "/tmp", transcriptPath: "", model: "", provider: provider, detail: detail)
     }
     var alerts = WaitingAlerts()
     let waiting = session("waiting")
@@ -551,8 +588,7 @@ suite("Codex live runtime status") {
     func runtime(_ flags: [String], type: String = "active") -> CodexRuntimeThread {
         CodexRuntimeThread(["id": "live", "cwd": "/tmp/live", "status": ["type": type, "activeFlags": flags]])!
     }
-    let hook = Session(id: "codex:live", state: "waiting", ts: 100, cwd: "/tmp/live", transcriptPath: "",
-        totalTokens: 10, inputTokens: 10, outputTokens: 0, cacheTokens: 0, model: "fixture", provider: .codex, detail: "permission")
+    let hook = Session(id: "codex:live", state: "waiting", ts: 100, cwd: "/tmp/live", transcriptPath: "", model: "fixture", provider: .codex, detail: "permission")
     let overlay = CodexRuntimeOverlay()
     let waiting = overlay.merge([hook], runtime: [runtime(["waitingOnApproval"])], now: 101)[0]
     expect(waiting.state, "waiting", "server confirms approval is pending")
@@ -562,7 +598,6 @@ suite("Codex live runtime status") {
     let working = overlay.merge([hook], runtime: [runtime([])], now: 102)[0]
     expect(working.state, "working", "answer clears amber before tool completion despite stale hook")
     expect(working.ts, 102.0, "working clock begins when answer is observed")
-    expect(working.totalTokens, 10, "runtime preserves hook usage")
     expect(working.needsKeepAwake, true, "resumed command keeps awake")
     expect(alerts.consume(ticket, current: working), false, "answered approval cannot sound")
     expect(overlay.merge([hook], runtime: [runtime([])], now: 103)[0].ts, 102.0, "polling preserves the state clock")
@@ -628,20 +663,17 @@ suite("Codex terminal ownership") {
            false, "recycled PID is not the original terminal client")
     expect(overlay.merge([], runtime: [thread()], clients: [reused]).count, 0,
            "a new client cannot resurrect a previously closed idle thread")
-    let serverHook = Session(id: "codex:live", state: "idle", ts: 100, cwd: "/tmp/live", transcriptPath: "",
-        totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: .codex, codexServerBacked: true)
+    let serverHook = Session(id: "codex:live", state: "idle", ts: 100, cwd: "/tmp/live", transcriptPath: "", model: "", provider: .codex, codexServerBacked: true)
     expect(CodexRuntimeOverlay().merge([serverHook], runtime: nil, clients: []).count, 0,
            "daemon hook idle also disappears when runtime is disconnected")
-    let directHook = Session(id: "codex:direct", state: "idle", ts: 100, cwd: "/tmp/live", transcriptPath: "",
-        totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", tty: "/dev/ttys003", terminal: "iTerm2", provider: .codex)
+    let directHook = Session(id: "codex:direct", state: "idle", ts: 100, cwd: "/tmp/live", transcriptPath: "", model: "", tty: "/dev/ttys003", terminal: "iTerm2", provider: .codex)
     expect(CodexRuntimeOverlay().merge([directHook], runtime: [], clients: []).count, 1,
            "standalone hook sessions retain their independent process lifecycle")
 }
 
 suite("Completion events across runtime polling") {
     func hook(_ state: String, ts: Double, event: String = "") -> Session {
-        Session(id: "codex:completion", state: state, ts: ts, cwd: "/tmp/completion", transcriptPath: "",
-            totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: .codex, lastEvent: event)
+        Session(id: "codex:completion", state: state, ts: ts, cwd: "/tmp/completion", transcriptPath: "", model: "", provider: .codex, lastEvent: event)
     }
     func thread(_ state: String) -> CodexRuntimeThread {
         CodexRuntimeThread(["id": "completion", "cwd": "/tmp/completion", "status": ["type": state, "activeFlags": []]])!
@@ -684,8 +716,7 @@ suite("Completion events across runtime polling") {
 
 suite("Repeated questions between runtime polls") {
     func hook(_ ts: Double) -> Session {
-        Session(id: "codex:question", state: "waiting", ts: ts, cwd: "/tmp", transcriptPath: "",
-            totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: .codex, detail: "input")
+        Session(id: "codex:question", state: "waiting", ts: ts, cwd: "/tmp", transcriptPath: "", model: "", provider: .codex, detail: "input")
     }
     let thread = CodexRuntimeThread(["id": "question", "status": ["type": "active", "activeFlags": ["waitingOnUserInput"]]])!
     let overlay = CodexRuntimeOverlay()
@@ -787,6 +818,89 @@ suite("Mixed Codex request kinds") {
     expect(question.detail, "input", "answering permission preserves the unanswered question detail")
     let questionTicket = alerts.schedule(question)
     expect(alerts.consume(questionTicket, current: question), true, "remaining unanswered question can sound")
+}
+
+suite("Claude hook adapter") {
+    let dir = makeTmpDir("claude-hooks")
+    func fire(_ state: String, _ event: String, _ fields: [String: Any] = [:]) -> [String: Any] {
+        var hook: [String: Any] = ["session_id": "claude", "hook_event_name": event, "cwd": "/tmp/project"]
+        hook.merge(fields) { _, new in new }
+        _ = try! HookAdapter.record(hook, provider: .claude, state: state, directory: dir)
+        return (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: dir + "/claude.json")))) as? [String: Any] ?? [:]
+    }
+    let question: [String: Any] = ["tool_name": "AskUserQuestion", "tool_input": ["questions": [["question": "Scope?"]]]]
+    let build: [String: Any] = ["tool_name": "Bash", "tool_input": ["command": "swift build", "description": "Build"]]
+    let read: [String: Any] = ["tool_name": "Read", "tool_input": ["file_path": "/tmp/project/README.md"]]
+    _ = fire("working", "UserPromptSubmit")
+    var record = fire("waiting", "PermissionRequest", question)
+    expect(record["detail"] as? String ?? "", "input", "a question asked through the permission flow is an input request")
+    expect((record["pending_tools"] as? [String])?.count ?? 0, 1, "the request is identified by a fingerprint")
+    expect(String(describing: record).contains("Scope?"), false, "question text is never persisted")
+    let asked = record["ts"] as? Double ?? 0
+    record = fire("waiting", "Notification", ["notification_type": "permission_prompt", "message": "Claude needs your permission"])
+    expect(record["detail"] as? String ?? "", "input", "the delayed notification does not demote the question to a permission")
+    expect(record["ts"] as? Double ?? 0, asked, "the delayed notification keeps the question's clock")
+    record = fire("resume", "PreToolUse", read.merging(["agent_id": "agent-1", "agent_type": "Explore"]) { _, new in new })
+    expect(record["state"] as? String ?? "", "waiting", "a subagent's tool call cannot answer the main thread")
+    record = fire("resume", "PostToolUse", read)
+    expect(record["state"] as? String ?? "", "waiting", "a parallel sibling's completion does not answer the request")
+    record = fire("resume", "PostToolUse", question)
+    expect(record["state"] as? String ?? "", "working", "completing the requested tool resumes work")
+    expect(record["detail"] as? String ?? "", "", "resuming clears the request kind")
+    record = fire("waiting", "PermissionRequest", build)
+    expect(record["detail"] as? String ?? "", "permission", "a later tool permission does not inherit the answered question")
+    record = fire("resume", "PreToolUse", read)
+    expect(record["state"] as? String ?? "", "working", "the main thread's next tool call resolves its own request")
+
+    // A background subagent's request survives the main thread's activity and ends with its own.
+    let subagent = build.merging(["agent_id": "agent-2", "agent_type": "worker"]) { _, new in new }
+    record = fire("waiting", "PermissionRequest", subagent)
+    expect(record["state"] as? String ?? "", "waiting", "a subagent's permission request needs the user")
+    record = fire("resume", "PreToolUse", read)
+    expect(record["state"] as? String ?? "", "waiting", "main-thread tool calls do not answer a subagent's request")
+    record = fire("resume", "PostToolUse", subagent)
+    expect(record["state"] as? String ?? "", "working", "the subagent's approved tool completing resumes work")
+    record = fire("waiting", "PermissionRequest", subagent)
+    record = fire("resume", "PreToolUse", read.merging(["agent_id": "agent-2"]) { _, new in new })
+    expect(record["state"] as? String ?? "", "working", "a subagent's next tool call resolves its own request")
+
+    // Two pending requests clear one at a time.
+    _ = fire("waiting", "PermissionRequest", question)
+    record = fire("waiting", "PermissionRequest", build)
+    expect(record["detail"] as? String ?? "", "input", "an unanswered question keeps the input kind beside a permission")
+    record = fire("resume", "PostToolUse", question)
+    expect(record["state"] as? String ?? "", "waiting", "one answered request leaves the other pending")
+    expect(record["detail"] as? String ?? "", "permission", "the remaining request determines the kind")
+    expect(fire("resume", "PostToolUse", build)["state"] as? String ?? "", "working", "the last request resumes work")
+    _ = fire("waiting", "PermissionRequest", build)
+    expect((fire("done", "Stop")["pending_tools"] as? [String] ?? ["x"]).count, 0, "a finished turn forgets its requests")
+
+    // A Stop that yields to a running background subagent is not a completion.
+    _ = fire("working", "UserPromptSubmit")
+    let runningAgent: [String: Any] = ["id": "a1", "type": "subagent", "status": "running", "agent_type": "general-purpose"]
+    let runningShell: [String: Any] = ["id": "s1", "type": "shell", "status": "running", "command": "sleep 25"]
+    record = fire("done", "Stop", ["background_tasks": [runningShell, runningAgent]])
+    expect(record["state"] as? String ?? "", "working", "a turn that yielded to a background subagent keeps working")
+    expect(record["background_subagents"] as? Int ?? 0, 1, "running subagents are counted, shells are not")
+    let yielded = SessionRepository(environment: SessionEnvironment(processIsDead: { _, _ in false })).loadSessions(dir: dir)[0]
+    expect(yielded.finished(within: 10), false, "no completion cue while a subagent runs")
+    expect(BeaconDescriptor(sessions: [yielded]).signal == .neutral, true, "the beacon keeps breathing, not green")
+    expect(yielded.needsKeepAwake, true, "the running subagent keeps the Mac awake")
+    record = fire("done", "Stop", ["background_tasks": [runningShell, ["id": "a1", "type": "subagent", "status": "completed"]]])
+    expect(record["state"] as? String ?? "", "done", "a background shell alone does not defer completion")
+    _ = fire("working", "UserPromptSubmit")
+    expect(fire("done", "StopFailure", ["background_tasks": [runningAgent]])["state"] as? String ?? "", "done",
+           "a failed turn is still over")
+
+    // Records written by the notification-only hook set still behave.
+    _ = fire("working", "UserPromptSubmit")
+    record = fire("waiting", "Notification", ["notification_type": "permission_prompt", "message": "Claude is waiting for your input"])
+    expect(record["detail"] as? String ?? "", "input", "notification text describing input is a question")
+    expect(fire("resume", "PostToolUse", read.merging(["agent_id": "agent-1"]) { _, new in new })["state"] as? String ?? "", "waiting",
+           "without request identities a subagent never answers the main thread")
+    expect(fire("resume", "PostToolUse", read)["state"] as? String ?? "", "working", "without request identities any main-thread step resumes")
+    expect(fire("waiting", "Notification", ["notification_type": "elicitation_dialog"])["detail"] as? String ?? "", "input",
+           "MCP elicitation dialogs are input requests")
 }
 
 suite("Installation readiness") {

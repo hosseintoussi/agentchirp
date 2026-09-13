@@ -34,10 +34,6 @@ public struct Session {
     public let cwd: String
     public let transcriptPath: String
     public let transcriptModifiedAt: TimeInterval?
-    public let totalTokens: Int
-    public let inputTokens: Int
-    public let outputTokens: Int
-    public let cacheTokens: Int
     public let model: String
     public let tty: String
     public let terminal: String
@@ -51,16 +47,13 @@ public struct Session {
     public let runtimeStatusVerified: Bool
 
     public init(id: String, state: String, ts: TimeInterval, cwd: String, transcriptPath: String,
-                totalTokens: Int, inputTokens: Int, outputTokens: Int, cacheTokens: Int,
                 model: String, tty: String = "", terminal: String = "",
                 provider: AgentProvider = .claude, lastEvent: String = "", detail: String = "", transcriptModifiedAt: TimeInterval? = nil, runtimeStatusVerified: Bool = false, codexServerBacked: Bool = false, completionAt: TimeInterval? = nil) {
         self.id = id; self.state = SessionState(rawValue: state) ?? .unknown; self.ts = ts; self.cwd = cwd
         self.codexServerBacked = codexServerBacked
         self.runtimeStatusVerified = runtimeStatusVerified
         self.transcriptModifiedAt = transcriptModifiedAt
-        self.transcriptPath = transcriptPath; self.totalTokens = totalTokens
-        self.inputTokens = inputTokens; self.outputTokens = outputTokens
-        self.cacheTokens = cacheTokens; self.model = model
+        self.transcriptPath = transcriptPath; self.model = model
         self.tty = tty; self.terminal = terminal
         self.provider = provider; self.lastEvent = SessionEvent(rawValue: lastEvent) ?? .unknown; self.detail = detail
         self.completionAt = self.lastEvent == .stop ? completionAt ?? ts : nil
@@ -135,13 +128,6 @@ public func fmtBarTime(_ s: Int) -> String {
     if s < 3600  { return "\(s / 60)m" }
     if s < 86400 { return "\(s / 3600)h" }
     return "\(s / 86400)d"
-}
-
-public func fmtK(_ n: Int) -> String {
-    if n == 0        { return "0" }
-    if n < 1_000     { return "\(n)" }
-    if n < 1_000_000 { return String(format: "%.1fk", Double(n) / 1_000) }
-    return String(format: "%.2fM", Double(n) / 1_000_000)
 }
 
 public func cleanModel(_ m: String) -> String { m.hasPrefix("claude-") ? String(m.dropFirst(7)) : m }

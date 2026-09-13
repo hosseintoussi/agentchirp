@@ -26,11 +26,17 @@
 - The needs-input sound is Ping instead of Sosumi
 - Same-name projects show `parent/name`; VoiceOver labels include state, time, and the ask; keyboard focus draws the system focus ring
 - Header shrank from 92 to 56 points and the footer was removed; the popover fits its content
-- Granting a permission now flips the session back to working immediately: a `PreToolUse` hook (`agentchirp.sh resume`) is installed for Claude Code and only writes when the session was waiting. Previously the app waited for the transcript to change, which could take as long as the approved tool ran
+- `PreToolUse` and `PostToolUse` hooks (`agentchirp.sh resume`) return a waiting Claude session to working at the next tool call or when the approved tool finishes; they only write when the session file says waiting. Claude Code reports no approval itself, so the transcript check still covers the gap while an approved tool runs
+- Token usage is no longer collected or shown; transcripts are read only for the model name and Claude's interrupt marker
 - `fmtElapsed` spaces units ("2h 1m") and adds days
 
 
 ### Fixed
+- Pressing Escape in Claude Code left the session "working" indefinitely, with keep-awake held, because Stop hooks do not fire on interrupts. The transcript's interrupt marker now resolves the session to idle without a completion cue
+- AskUserQuestion showed "Needs permission": Claude Code reports it through the permission flow. A `PermissionRequest` hook names the tool, stores the generic kind `input`, and marks waiting immediately instead of after the notification's six-second delay
+- The completion chime waits 1.5 seconds and is dropped when a queued prompt, such as a background result or a message typed while Claude worked, resumes the session right after its Stop
+- Ending a turn while a background subagent is still running no longer chimes or shows the session idle; the completion cue plays once, after the result has been handled
+- Pending Claude requests are tracked by fingerprint and owning agent, as Codex requests already were: a parallel tool finishing or a background subagent's tool call no longer clears another request, and a subagent's own approved tool resumes it
 - Completion cues retain the successful hook's identity and time: stale successes cannot finish later Codex turns, and a Stop arriving after runtime idle still sounds once
 - Successive Codex questions between polls receive separate clocks, sound timers, and attention flashes
 - Closed Codex threads no longer block new terminal bindings or reappear after restarting AgentChirp

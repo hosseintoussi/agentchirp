@@ -32,7 +32,7 @@ line the provider and, when the agent is waiting, what it is asking for ("Needs
 permission", "Waiting for your answer"). Projects with the same folder name
 show their parent folder.
 
-Click anywhere on a row to open its terminal; hover for the full path and token usage.
+Click anywhere on a row to open its terminal; hover for the full path.
 Terminal jumps support iTerm2 and Terminal.app; rows without a supported terminal
 have no action. Arrow keys move between rows, Return opens the selected
 session, Escape dismisses the popover. Live updates reorder the list in place without
@@ -171,10 +171,9 @@ matched client exits or no client remains in the project; detached work stays vi
 Process-inspection failures preserve rows. This integration does not attach to
 remote Codex servers or import historical sessions.
 
-Usage is a best-effort adapter for local Codex JSONL transcripts. It reads only
-appended complete records and uses cumulative totals, splitting cached input out
-of the IN column so tokens are not counted twice. Missing or changed transcript
-formats do not affect hook-based lifecycle tracking.
+The model name is read best-effort from local Codex JSONL transcripts, parsing only
+appended complete records. Missing or changed transcript formats do not affect
+hook-based lifecycle tracking.
 
 See [Codex hook documentation](https://learn.chatgpt.com/docs/hooks) for the
 supported events and required trust review.
@@ -190,8 +189,11 @@ Claude Code calls it on these events:
 |------|---------|--------------|
 | `SessionStart` | — | `idle` |
 | `UserPromptSubmit` | — | `working` |
+| `PermissionRequest` | — | `waiting` |
 | `Notification` | `permission_prompt` | `waiting` |
 | `Notification` | `elicitation_dialog` | `waiting` |
+| `PreToolUse` | — | `working`, only if the file says `waiting` |
+| `PostToolUse` | — | `working`, only if the file says `waiting` |
 | `Stop` | — | `done` |
 | `StopFailure` | — | `done` |
 | `SessionEnd` | — | session file removed |
@@ -200,7 +202,23 @@ Each call atomically writes a small JSON file to `~/.claude/agentchirp/sessions/
 
 Sessions are kept alive as long as their Claude process is running (verified via `kill(pid, 0)` plus a process start-time check that guards against PID reuse). When the session ends — whether from a normal close or the process exiting — it disappears from the menu immediately.
 
-Two `Notification` matchers trigger the amber "needs input" state: `permission_prompt` (tool approval dialogs) and `elicitation_dialog` (option/question UI rendered by Claude). Other notification types are ignored.
+`PermissionRequest` turns the beacon amber the moment Claude asks for anything, including
+an `AskUserQuestion` question, which is shown as "Waiting for your answer". The
+`permission_prompt` notification, which Claude Code sends about six seconds later, and
+`elicitation_dialog` (MCP forms) cover the same state. Other notification types are ignored.
+
+Claude Code fires `PreToolUse` before the permission prompt and does not fire it again
+after you approve, and no hook reports the approval itself. The session returns to
+working when that tool finishes (`PostToolUse`, matched to the request), when the same
+agent's next tool call starts, or when the transcript moves on. A parallel tool finishing,
+or a background subagent's tool call, never clears someone else's request. Pressing Escape fires no hook at all, so AgentChirp
+watches the transcript for Claude Code's interrupt marker and shows the session as idle
+from that moment, without a completion cue.
+
+Subagents never chime on their own. When the main agent hands off to a background
+subagent and ends its turn, the session stays working and the completion sound waits for
+the turn that ends with no subagent running. A background shell, such as a dev server,
+does not hold the sound back.
 
 A `flock`-based exclusive lock in the hook script prevents a race condition where a `Notification` hook firing mid-run could overwrite a `Stop` hook running at the same moment.
 
@@ -209,8 +227,9 @@ A `flock`-based exclusive lock in the hook script prevents a race condition wher
 ## Security
 
 Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/agentchirp/sessions/`. The Codex adapter writes state under `$CODEX_HOME/agentchirp/sessions` (default `~/.codex`).
-Both adapters retain session metadata, not prompt or tool content. The app reads
-per-session token counts from your local transcript files. Session data stays on your machine. If enabled, update checks contact GitHub to retrieve the release feed and update files; system profiling is disabled.
+Both adapters retain session metadata, not prompt or tool content. The app reads your
+local transcript files only for the model name and Claude Code's interrupt marker; it
+never stores or displays their content. Session data stays on your machine. If enabled, update checks contact GitHub to retrieve the release feed and update files; system profiling is disabled.
 
 ## License
 

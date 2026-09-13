@@ -60,7 +60,7 @@ waiting session, what it is asking for ("Needs permission", "Waiting for
 your answer"); otherwise the model. Projects with the same folder name show their
 parent folder. The whole row opens its terminal when available; rows without a supported
 terminal have no action or action icon. Hover shows
-the full path and token usage. Arrow keys move between rows; Return activates;
+the full path. Arrow keys move between rows; Return activates;
 keyboard focus draws the system focus ring.
 
 The empty state confirms readiness and which providers are watched.

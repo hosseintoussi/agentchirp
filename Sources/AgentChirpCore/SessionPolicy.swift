@@ -136,3 +136,34 @@ public struct WaitingAlerts {
         return true
     }
 }
+
+/// A Stop followed within moments by a queued prompt (a background result, a message typed
+/// while Claude worked) is not the end of the job. Completion sounds wait briefly and are
+/// dropped when the session is no longer idle with the same completion; the green cue is immediate.
+public struct CompletionAlerts {
+    public struct Ticket: Equatable {
+        let id: String
+        let completedAt: TimeInterval
+        let generation: UUID
+    }
+    private var pending: [String: Ticket] = [:]
+    public init() {}
+    public mutating func schedule(_ session: Session) -> Ticket? {
+        guard session.state == .idle, let completedAt = session.completionAt else { return nil }
+        let ticket = Ticket(id: session.id, completedAt: completedAt, generation: UUID())
+        pending[session.id] = ticket
+        return ticket
+    }
+    public func contains(_ ticket: Ticket) -> Bool { pending[ticket.id] == ticket }
+    public mutating func reconcile(_ sessions: [Session]) {
+        let idle = Dictionary(sessions.filter { $0.state == .idle }.compactMap { session in
+            session.completionAt.map { (session.id, $0) }
+        }, uniquingKeysWith: { _, new in new })
+        pending = pending.filter { idle[$0.key] == $0.value.completedAt }
+    }
+    public mutating func consume(_ ticket: Ticket) -> Bool {
+        guard contains(ticket) else { return false }
+        pending.removeValue(forKey: ticket.id)
+        return true
+    }
+}
