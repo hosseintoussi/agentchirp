@@ -95,7 +95,11 @@ feed offers full updates; it does not generate delta updates.
 
 ## GitHub Actions credentials
 
-Add these in the repository's Settings → Secrets and variables → Actions:
+Add these under Settings → Environments → **release**, as environment secrets
+and variables. The release environment requires approval from `hosseintoussi`
+before the signing job starts and only permits deployments from `main`.
+Keep signing credentials out of repository-level secrets so unrelated workflows
+cannot request them without this approval.
 
 | Type | Name | Value |
 | --- | --- | --- |
@@ -118,12 +122,22 @@ profiling or session data to GitHub.
 
 1. Move the completed changes from `[Unreleased]` into a dated `[X.Y.Z]` section
    in `CHANGELOG.md` and bump `appVersion` in `Sources/AgentChirpCore/Version.swift`.
-2. Commit, tag `vX.Y.Z`, and push main plus the tag when ready to publish.
+2. Open a pull request and merge it after the required `build-and-test` check passes.
+   Create and push `vX.Y.Z` on that exact main commit before its CI run completes.
+   If CI has already completed, rerun that main-push CI run after pushing the tag.
+   Direct main pushes, force pushes, and deletion are blocked. Only the repository
+   administrator can create `v*` tags; existing release tags cannot be moved or deleted.
 3. CI must pass on that exact main-push commit. The release workflow checks out
    that successful SHA and requires the tag and app version to match.
-4. The workflow builds and checks the app, notarizes/staples it, verifies the
+4. Approve the `release` environment deployment on the Actions run. Untagged
+   commits are skipped before the approval gate. The workflow builds and checks the app, notarizes/staples it, verifies the
    update signature, and publishes the assets. Missing credentials or a failed
    verification stop publication.
+
+The administrator can approve their own release because this is a solo-maintainer
+repository. The workflow's external Actions are pinned to full commit SHAs, and
+Dependabot proposes reviewed dependency updates. When updating Sparkle, update its
+pinned tooling version/checksum and appcast tool path along with `Package.swift`.
 
 The README download button points to `releases/latest/download/AgentChirp.dmg`.
 The GitHub repository is `hosseintoussi/agentchirp`. CI derives hosting URLs from

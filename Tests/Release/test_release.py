@@ -9,7 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT / ".github/workflows/release.yml").read_text()
 TAG_STEP = textwrap.dedent(WORKFLOW.split("      - name: Find version tag on this commit\n", 1)[1]
-                          .split("        run: |\n", 1)[1].split("\n      - name:", 1)[0])
+                          .split("        run: |\n", 1)[1].split("\n\n", 1)[0])
 
 
 class ReleaseTests(unittest.TestCase):

@@ -4,3 +4,17 @@
 /agentchirp
 /dist/
 __pycache__/
+
+# Local configuration and exported signing credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+*.p12
+*.pfx
+*.key
+*.pem
+*.keychain
+*.keychain-db
+sparkle-private-key*
+developer-id.p12*

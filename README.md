@@ -211,3 +211,7 @@ A `flock`-based exclusive lock in the hook script prevents a race condition wher
 Everything runs locally. The hook script reads session metadata from Claude Code's hook stdin and writes state to `~/.claude/agentchirp/sessions/`. The Codex adapter writes state under `$CODEX_HOME/agentchirp/sessions` (default `~/.codex`).
 Both adapters retain session metadata, not prompt or tool content. The app reads
 per-session token counts from your local transcript files. Session data stays on your machine. If enabled, update checks contact GitHub to retrieve the release feed and update files; system profiling is disabled.
+
+## License
+
+AgentChirp is available under the [MIT License](LICENSE).

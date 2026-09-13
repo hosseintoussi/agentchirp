@@ -1,0 +1,6 @@
+# Route changes to release and security controls to the maintainer.
+/.github/ @hosseintoussi
+/Packaging/ @hosseintoussi
+/scripts/ @hosseintoussi
+/SECURITY.md @hosseintoussi
+/RELEASING.md @hosseintoussi
