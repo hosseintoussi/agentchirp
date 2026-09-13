@@ -142,10 +142,16 @@ approval-resolved hook; `resume` therefore ends a wait at the approved tool's Po
 or at the next tool call, and the app's transcript-mtime check covers the gap. Because
 both resume events fire for every tool call, the shell exits before launching the native
 helper unless the session file currently says waiting; the writer rechecks under the lock
-before resuming, and ignores calls carrying `agent_id` (subagents). PermissionRequest
-fires immediately, about six seconds before the permission_prompt notification, and is the
-only event that names the tool: `AskUserQuestion` persists the generic kind `input`, which a
-later notification for the same request must not demote to `permission`. A repeated
+before resuming. PermissionRequest fires immediately, about six seconds before the
+permission_prompt notification, and is the only event that identifies the request: the
+helper stores a SHA-256 fingerprint of tool name and input (identical in PostToolUse) in
+`pending_tools`, its generic kind in `pending_kinds` (`AskUserQuestion` → `input`, which a
+later notification must not demote) and its owner in `pending_agents` (`agent_id`, empty for
+the main thread). PostToolUse resumes only the matching request; PreToolUse resolves every
+request owned by the calling agent, so a parallel sibling's completion or a subagent's tool
+call never clears someone else's prompt. Records without fingerprints (notification-only
+hook sets) resume on any main-thread step. Headless `claude -p` runs fire PermissionRequest
+and then deny without a prompt, so they can show a brief wait. A repeated
 state keeps its `ts`, so clocks measure time in the current state. Hooks persist
 `last_event`; only Stop is successful completion. Startup, StopFailure, and Interrupt
 never produce a completion sound or green tint. Escape fires no hook: `loadSessions`

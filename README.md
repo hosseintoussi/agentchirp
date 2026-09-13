@@ -209,9 +209,9 @@ an `AskUserQuestion` question, which is shown as "Waiting for your answer". The
 
 Claude Code fires `PreToolUse` before the permission prompt and does not fire it again
 after you approve, and no hook reports the approval itself. The session returns to
-working when the approved tool finishes (`PostToolUse`), when Claude's next tool call
-starts, or when the transcript moves on. A tool call made by a background subagent never
-clears the main thread's request. Pressing Escape fires no hook at all, so AgentChirp
+working when that tool finishes (`PostToolUse`, matched to the request), when the same
+agent's next tool call starts, or when the transcript moves on. A parallel tool finishing,
+or a background subagent's tool call, never clears someone else's request. Pressing Escape fires no hook at all, so AgentChirp
 watches the transcript for Claude Code's interrupt marker and shows the session as idle
 from that moment, without a completion cue.
 

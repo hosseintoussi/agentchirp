@@ -71,8 +71,7 @@ public enum HookAdapter {
             let tool = string("tool_name", in: hook)
             var input: Any = hook["tool_input"] ?? NSNull()
             if let object = input as? [String: Any], let command = object["command"] { input = ["command": command] }
-            let bytes = try JSONSerialization.data(withJSONObject: [tool, input], options: [.sortedKeys, .withoutEscapingSlashes])
-            let fingerprint = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            let fingerprint = try requestFingerprint(tool: tool, input: input)
             let call = string("tool_use_id", in: hook)
             var key = call.isEmpty ? fingerprint : "call:" + call
             if event == "PermissionRequest" { key = fingerprint }
@@ -92,25 +91,50 @@ public enum HookAdapter {
             }
             extra = ["turn_id": turn, "pending_tools": pending, "pending_kinds": kinds, "model": inherited("model")]
         } else {
+            // Claude Code sets agent_id only inside a subagent. PermissionRequest is the only
+            // event that identifies the request (tool name and input, identical in PostToolUse),
+            // so pending requests are tracked by fingerprint and owning agent, like Codex.
+            let agent = string("agent_id", in: hook)
+            let tool = string("tool_name", in: hook)
+            var pending = previous["pending_tools"] as? [String] ?? []
+            var kinds = previous["pending_kinds"] as? [String: String] ?? [:]
+            var agents = previous["pending_agents"] as? [String: String] ?? [:]
+            let fingerprint = tool.isEmpty ? nil : try requestFingerprint(tool: tool, input: hook["tool_input"] ?? NSNull())
             if state == "resume" {
-                // Claude Code sets agent_id only inside a subagent. A background agent's
-                // tool call is not the user's answer to the main thread's request.
-                if !string("agent_id", in: hook).isEmpty { return "" }
-                if !previousState.isEmpty && previousState != "waiting" { return "" }
-                state = "working"
+                guard previousState.isEmpty || previousState == "waiting" else { return "" }
+                if pending.isEmpty {
+                    // A record without request identities: only the main thread's next step answers it.
+                    if !agent.isEmpty { return "" }
+                } else if event == "PostToolUse", let fingerprint, pending.contains(fingerprint) {
+                    pending.removeAll { $0 == fingerprint }
+                } else if event == "PreToolUse" {
+                    // An agent that starts its next tool has had its own request resolved;
+                    // a parallel sibling's completion has not.
+                    pending.removeAll { (agents[$0] ?? "") == agent }
+                } else { return "" }
+                state = pending.isEmpty ? "working" : "waiting"
             }
             if state == "waiting" && previousState == "done" { return "" }
             if state == "idle" && ["working", "waiting"].contains(previousState) { return "" }
+            if state != "waiting" { pending = [] }
+            if state == "waiting", event == "PermissionRequest", let fingerprint {
+                if !pending.contains(fingerprint) { pending.append(fingerprint) }
+                kinds[fingerprint] = tool == "AskUserQuestion" ? "input" : "permission"
+                agents[fingerprint] = agent
+            }
+            kinds = kinds.filter { pending.contains($0.key) }
+            agents = agents.filter { pending.contains($0.key) }
             if state == "waiting" {
-                // AskUserQuestion reaches hooks as a permission request and a permission_prompt
-                // notification. Keep a question's kind when the later notification repeats it.
+                // AskUserQuestion reaches hooks as a permission request and, six seconds later, a
+                // permission_prompt notification. Neither may demote a question to a permission.
                 let message = string("message", in: hook).lowercased()
-                let question = string("notification_type", in: hook) == "elicitation_dialog"
-                    || string("tool_name", in: hook) == "AskUserQuestion"
+                let question = kinds.values.contains("input")
+                    || string("notification_type", in: hook) == "elicitation_dialog"
                     || message.contains("waiting for your input") || message.contains("question")
-                    || (previousState == "waiting" && string("detail", in: previous) == "input")
+                    || (pending.isEmpty && previousState == "waiting" && string("detail", in: previous) == "input")
                 detail = question ? "input" : "permission"
             }
+            extra = ["pending_tools": pending, "pending_kinds": kinds, "pending_agents": agents]
         }
         let now = Date().timeIntervalSince1970
         let ts = previousState == state && sameTurn ? previous["ts"] as? Double ?? now : now
@@ -126,6 +150,12 @@ public enum HookAdapter {
         try data.write(to: temporary)
         guard rename(temporary.path, path.path) == 0 else { throw POSIXError(.EIO) }
         return state
+    }
+
+    /// Generic request identity: hooks persist hashes, never tool names or inputs.
+    private static func requestFingerprint(tool: String, input: Any) throws -> String {
+        let bytes = try JSONSerialization.data(withJSONObject: [tool, input], options: [.sortedKeys, .withoutEscapingSlashes])
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func isChild(_ hook: [String: Any], sessionID: String) -> Bool {

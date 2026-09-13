@@ -800,22 +800,60 @@ suite("Claude hook adapter") {
         _ = try! HookAdapter.record(hook, provider: .claude, state: state, directory: dir)
         return (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: dir + "/claude.json")))) as? [String: Any] ?? [:]
     }
+    let question: [String: Any] = ["tool_name": "AskUserQuestion", "tool_input": ["questions": [["question": "Scope?"]]]]
+    let build: [String: Any] = ["tool_name": "Bash", "tool_input": ["command": "swift build", "description": "Build"]]
+    let read: [String: Any] = ["tool_name": "Read", "tool_input": ["file_path": "/tmp/project/README.md"]]
     _ = fire("working", "UserPromptSubmit")
-    var record = fire("waiting", "PermissionRequest", ["tool_name": "AskUserQuestion", "tool_input": ["questions": []]])
+    var record = fire("waiting", "PermissionRequest", question)
     expect(record["detail"] as? String ?? "", "input", "a question asked through the permission flow is an input request")
+    expect((record["pending_tools"] as? [String])?.count ?? 0, 1, "the request is identified by a fingerprint")
+    expect(String(describing: record).contains("Scope?"), false, "question text is never persisted")
     let asked = record["ts"] as? Double ?? 0
     record = fire("waiting", "Notification", ["notification_type": "permission_prompt", "message": "Claude needs your permission"])
     expect(record["detail"] as? String ?? "", "input", "the delayed notification does not demote the question to a permission")
     expect(record["ts"] as? Double ?? 0, asked, "the delayed notification keeps the question's clock")
-    record = fire("resume", "PreToolUse", ["tool_name": "Bash", "agent_id": "agent-1", "agent_type": "Explore"])
+    record = fire("resume", "PreToolUse", read.merging(["agent_id": "agent-1", "agent_type": "Explore"]) { _, new in new })
     expect(record["state"] as? String ?? "", "waiting", "a subagent's tool call cannot answer the main thread")
-    record = fire("resume", "PostToolUse", ["tool_name": "AskUserQuestion"])
-    expect(record["state"] as? String ?? "", "working", "the completed tool resumes work")
+    record = fire("resume", "PostToolUse", read)
+    expect(record["state"] as? String ?? "", "waiting", "a parallel sibling's completion does not answer the request")
+    record = fire("resume", "PostToolUse", question)
+    expect(record["state"] as? String ?? "", "working", "completing the requested tool resumes work")
     expect(record["detail"] as? String ?? "", "", "resuming clears the request kind")
-    record = fire("waiting", "PermissionRequest", ["tool_name": "Bash"])
+    record = fire("waiting", "PermissionRequest", build)
     expect(record["detail"] as? String ?? "", "permission", "a later tool permission does not inherit the answered question")
+    record = fire("resume", "PreToolUse", read)
+    expect(record["state"] as? String ?? "", "working", "the main thread's next tool call resolves its own request")
+
+    // A background subagent's request survives the main thread's activity and ends with its own.
+    let subagent = build.merging(["agent_id": "agent-2", "agent_type": "worker"]) { _, new in new }
+    record = fire("waiting", "PermissionRequest", subagent)
+    expect(record["state"] as? String ?? "", "waiting", "a subagent's permission request needs the user")
+    record = fire("resume", "PreToolUse", read)
+    expect(record["state"] as? String ?? "", "waiting", "main-thread tool calls do not answer a subagent's request")
+    record = fire("resume", "PostToolUse", subagent)
+    expect(record["state"] as? String ?? "", "working", "the subagent's approved tool completing resumes work")
+    record = fire("waiting", "PermissionRequest", subagent)
+    record = fire("resume", "PreToolUse", read.merging(["agent_id": "agent-2"]) { _, new in new })
+    expect(record["state"] as? String ?? "", "working", "a subagent's next tool call resolves its own request")
+
+    // Two pending requests clear one at a time.
+    _ = fire("waiting", "PermissionRequest", question)
+    record = fire("waiting", "PermissionRequest", build)
+    expect(record["detail"] as? String ?? "", "input", "an unanswered question keeps the input kind beside a permission")
+    record = fire("resume", "PostToolUse", question)
+    expect(record["state"] as? String ?? "", "waiting", "one answered request leaves the other pending")
+    expect(record["detail"] as? String ?? "", "permission", "the remaining request determines the kind")
+    expect(fire("resume", "PostToolUse", build)["state"] as? String ?? "", "working", "the last request resumes work")
+    _ = fire("waiting", "PermissionRequest", build)
+    expect((fire("done", "Stop")["pending_tools"] as? [String] ?? ["x"]).count, 0, "a finished turn forgets its requests")
+
+    // Records written by the notification-only hook set still behave.
+    _ = fire("working", "UserPromptSubmit")
     record = fire("waiting", "Notification", ["notification_type": "permission_prompt", "message": "Claude is waiting for your input"])
     expect(record["detail"] as? String ?? "", "input", "notification text describing input is a question")
+    expect(fire("resume", "PostToolUse", read.merging(["agent_id": "agent-1"]) { _, new in new })["state"] as? String ?? "", "waiting",
+           "without request identities a subagent never answers the main thread")
+    expect(fire("resume", "PostToolUse", read)["state"] as? String ?? "", "working", "without request identities any main-thread step resumes")
     expect(fire("waiting", "Notification", ["notification_type": "elicitation_dialog"])["detail"] as? String ?? "", "input",
            "MCP elicitation dialogs are input requests")
 }

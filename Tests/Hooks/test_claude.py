@@ -32,7 +32,8 @@ class ClaudeHookTests(unittest.TestCase):
         # approval, so PostToolUse of the approved tool is the first resume signal.
         self.assertEqual(self.fire("working", "UserPromptSubmit")["state"], "working")
         self.assertEqual(self.fire("resume", "PreToolUse", tool_name="Bash")["state"], "working")
-        waiting = self.fire("waiting", "PermissionRequest", tool_name="Bash", tool_input={"command": "rm -rf build"})
+        command = {"command": "rm -rf build"}
+        waiting = self.fire("waiting", "PermissionRequest", tool_name="Bash", tool_input=command)
         self.assertEqual(waiting["state"], "waiting")
         self.assertEqual(waiting["detail"], "permission")
         delayed = self.fire("waiting", "Notification", notification_type="permission_prompt",
@@ -40,9 +41,12 @@ class ClaudeHookTests(unittest.TestCase):
         self.assertEqual(delayed["ts"], waiting["ts"], "the delayed notification keeps the request clock")
         self.assertNotIn("Bash", self.path.read_text())
         self.assertNotIn("rm -rf", self.path.read_text())
-        resumed = self.fire("resume", "PostToolUse", tool_name="Bash")
+        sibling = self.fire("resume", "PostToolUse", tool_name="Read", tool_input={"file_path": "/tmp/project/x"})
+        self.assertEqual(sibling["state"], "waiting", "a parallel read finishing is not the approval")
+        resumed = self.fire("resume", "PostToolUse", tool_name="Bash", tool_input=command, tool_response={"stdout": ""})
         self.assertEqual(resumed["state"], "working")
         self.assertEqual(resumed["detail"], "")
+        self.assertEqual(resumed["pending_tools"], [])
 
     def test_next_tool_call_also_resumes(self):
         self.fire("waiting", "Notification", notification_type="permission_prompt")
@@ -57,15 +61,15 @@ class ClaudeHookTests(unittest.TestCase):
 
     def test_question_stays_an_input_request(self):
         self.fire("working", "UserPromptSubmit")
-        asked = self.fire("waiting", "PermissionRequest", tool_name="AskUserQuestion",
-                          tool_input={"questions": [{"question": "Secret?"}]})
+        questions = {"questions": [{"question": "Secret?"}]}
+        asked = self.fire("waiting", "PermissionRequest", tool_name="AskUserQuestion", tool_input=questions)
         self.assertEqual(asked["detail"], "input")
         self.assertNotIn("Secret", self.path.read_text())
         repeated = self.fire("waiting", "Notification", notification_type="permission_prompt",
                              message="Claude needs your permission")
         self.assertEqual(repeated["detail"], "input")
         self.assertEqual(repeated["ts"], asked["ts"])
-        self.assertEqual(self.fire("resume", "PostToolUse", tool_name="AskUserQuestion")["detail"], "")
+        self.assertEqual(self.fire("resume", "PostToolUse", tool_name="AskUserQuestion", tool_input=questions)["detail"], "")
         self.assertEqual(self.fire("waiting", "PermissionRequest", tool_name="Bash")["detail"], "permission")
 
     def test_tool_calls_while_working_are_free(self):
