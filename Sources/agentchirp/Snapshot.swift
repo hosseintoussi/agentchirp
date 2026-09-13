@@ -255,7 +255,6 @@ func checkDashboardInteractions() {
     let delegate = AppDelegate()
     delegate.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let button = delegate.statusItem.button!
-    waitFor("Status item must attach to a visible window") { button.window?.isVisible == true }
     delegate.updateButton([session("attention", "working")])
     check(delegate.attentionTimer == nil && button.image!.isTemplate, "Working keeps the template beacon")
     let workingArt = button.image!.tiffRepresentation
@@ -354,11 +353,25 @@ func checkDashboardInteractions() {
     delegate.updateSleepAssertion(working: true)
     check(delegate.sleepAssertion == nil && delegate.displaySleepAssertion == nil, "Disabled keep-awake never asserts")
 
-    // Exercise the real anchored NSPopover as well as the standalone view.
+    // Give the real popover a deterministic, on-screen anchor. Hosted runners
+    // can create a status item without exposing its button in the menu bar.
+    guard let screen = NSScreen.main else {
+        check(false, "Native UI checks require a graphical macOS session")
+        return
+    }
+    let anchorWindow = NSWindow(contentRect: NSRect(x: screen.visibleFrame.midX - 100,
+        y: screen.visibleFrame.maxY - 60, width: 200, height: 30),
+        styleMask: [.borderless], backing: .buffered, defer: false)
+    anchorWindow.isReleasedWhenClosed = false
+    let anchor = NSView(frame: NSRect(x: 80, y: 0, width: 24, height: 24))
+    anchorWindow.contentView!.addSubview(anchor)
+    anchorWindow.orderFrontRegardless()
+    defer { anchorWindow.close() }
+    waitFor("Popover test anchor must be visible") { anchor.window?.isVisible == true }
     let anchored = DashboardController()
     let popover = NSPopover()
     popover.animates = false
-    anchored.show(in: popover, relativeTo: button,
+    anchored.show(in: popover, relativeTo: anchor,
                   sessions: initial + [session("keyboard-next", "working")], muted: false)
     waitFor("Popover must attach its content window") { anchored.view.window != nil && popover.isShown }
     let anchoredRows = descendants(anchored.view).compactMap { $0 as? SessionRow }.filter { $0.isEnabled }
@@ -406,7 +419,7 @@ func checkDashboardInteractions() {
         var chromeHeight: CGFloat?
         var anchorTop: CGFloat?
         for count in [20, 1, 0, 12, 2, 20, 1] {
-            anchored.show(in: popover, relativeTo: button,
+            anchored.show(in: popover, relativeTo: anchor,
                           sessions: (0..<count).map { session("cycle-\($0)", "working") }, muted: false)
             RunLoop.current.run(until: Date(timeIntervalSinceNow: animated ? 0.3 : 0.06))
             waitFor("Reopened popover must attach its content window") { anchored.view.window != nil && popover.isShown }
