@@ -38,9 +38,10 @@ have no action. Arrow keys move between rows, Return opens the selected
 session, Escape dismisses the popover. Live updates reorder the list in place without
 resizing the open popover.
 
-While any session is working, AgentChirp keeps your Mac from going to sleep (the
-display stays on). Three captioned buttons sit at the top right: Awake turns
-that off (it then reads May sleep), Sounds toggles sounds, Quit quits (hover it for
+While any session is working or a Codex session is waiting for input, AgentChirp
+keeps your Mac from going to sleep (the display stays on). Three captioned buttons
+sit at the top right: Awake turns that off (it then reads May sleep), Sounds toggles
+sounds, Quit quits (hover it for
 the version).
 The console follows your Mac's light or dark appearance and Increase Contrast, and
 Reduce Motion removes the flash.
