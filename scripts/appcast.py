@@ -30,7 +30,7 @@ def build(archive, tools, repository, key_file=None):
         info = plistlib.loads(zipped.read("AgentChirp.app/Contents/Info.plist"))
     if info.get("AgentChirpDevelopment", True):
         raise ValueError("Never publish development bundles in an update feed")
-    version = info["CFBundleShortVersionString"]
+    version = info.get("AgentChirpVersion", info["CFBundleShortVersionString"])
     if info.get("SUFeedURL") != f"https://github.com/{repository}/releases/latest/download/appcast.xml":
         raise ValueError("The app's update feed and release repository do not match")
     prefix = f"https://github.com/{repository}/releases/download/v{version}/"

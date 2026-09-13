@@ -19,7 +19,7 @@ def run(*args, **kwargs):
 
 
 def version():
-    return re.search(r'public let appVersion = "([0-9]+\.[0-9]+\.[0-9]+)"',
+    return re.search(r'public let appVersion = "([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[1-9][0-9]*)?)"',
                      (ROOT / "Sources/AgentChirpCore/Version.swift").read_text())[1]
 
 
@@ -79,7 +79,11 @@ def package(development, identity, output):
         info = dict(template)
         if os.environ.get("GITHUB_REPOSITORY"):
             info["SUFeedURL"] = "https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/releases/latest/download/appcast.xml"
-        info.update(CFBundleShortVersionString=version(), CFBundleVersion=version(), AgentChirpDevelopment=development)
+        release_version = version()
+        short_version = release_version.split("-rc.")[0]
+        build_version = release_version.replace("-rc.", "fc")
+        info.update(CFBundleShortVersionString=short_version, CFBundleVersion=build_version,
+                    AgentChirpVersion=release_version, AgentChirpDevelopment=development)
         if key:
             info["SUPublicEDKey"] = key
         if development:

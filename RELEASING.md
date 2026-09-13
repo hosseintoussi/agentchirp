@@ -120,6 +120,14 @@ profiling or session data to GitHub.
 
 ## Publish
 
+Release candidates use `appVersion` and a dated changelog section such as
+`3.0.0-rc.1`, tagged `v3.0.0-rc.1`. Follow the same CI and signing process below.
+The workflow publishes these as GitHub prereleases, never as Latest, so the stable
+download link and update feed continue to serve the stable release. Share the
+prerelease page directly with testers. The app tooltip and ZIP retain the RC
+version; bundle metadata uses `3.0.0` and build `3.0.0fc1`, with the full version
+in `AgentChirpVersion`. The final `3.0.0` build sorts after its candidates for updates.
+
 1. Move the completed changes from `[Unreleased]` into a dated `[X.Y.Z]` section
    in `CHANGELOG.md` and bump `appVersion` in `Sources/AgentChirpCore/Version.swift`.
 2. Open a pull request and merge it after the required `build-and-test` check passes.

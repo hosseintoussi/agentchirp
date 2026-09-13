@@ -59,6 +59,16 @@ class ReleaseTests(unittest.TestCase):
         self.git("tag", "-a", "v1.0.0", "-m", "release")
         self.assertEqual(self.select(), (0, "name=v1.0.0"))
 
+    def test_release_candidate_is_supported(self):
+        self.commit("3.0.0-rc.1")
+        self.git("tag", "v3.0.0-rc.1")
+        self.assertEqual(self.select(), (0, "name=v3.0.0-rc.1"))
+
+    def test_candidate_cannot_publish_as_stable(self):
+        self.commit("3.0.0-rc.1")
+        self.git("tag", "v3.0.0")
+        self.assertNotEqual(self.select()[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

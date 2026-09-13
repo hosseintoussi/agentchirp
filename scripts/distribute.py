@@ -22,7 +22,7 @@ def distribute(app, profile, identity, development):
     if not (ROOT / ".build/packaging-venv/bin/python3").exists():
         raise SystemExit("Create the packaging venv and install Packaging/requirements.txt; see RELEASING.md.")
     output = app.parent
-    archive = output / ("AgentChirp-" + info["CFBundleShortVersionString"] + ".zip")
+    archive = output / ("AgentChirp-" + info.get("AgentChirpVersion", info["CFBundleShortVersionString"]) + ".zip")
     dmg = output / "AgentChirp.dmg"
     run("codesign", "--verify", "--deep", "--strict", app)
     with tempfile.TemporaryDirectory(prefix="agentchirp-distribution-") as temporary:
