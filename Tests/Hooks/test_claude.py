@@ -27,15 +27,46 @@ class ClaudeHookTests(unittest.TestCase):
                        capture_output=True, check=True, env=env)
         return json.loads(self.path.read_text()) if self.path.exists() else None
 
-    def test_permission_grant_resumes_working(self):
+    def test_approved_tool_completion_resumes_working(self):
+        # Claude Code runs PreToolUse before the permission prompt and never again after
+        # approval, so PostToolUse of the approved tool is the first resume signal.
         self.assertEqual(self.fire("working", "UserPromptSubmit")["state"], "working")
-        waiting = self.fire("waiting", "Notification", message="Claude needs your permission to use Bash")
+        self.assertEqual(self.fire("resume", "PreToolUse", tool_name="Bash")["state"], "working")
+        waiting = self.fire("waiting", "PermissionRequest", tool_name="Bash", tool_input={"command": "rm -rf build"})
         self.assertEqual(waiting["state"], "waiting")
         self.assertEqual(waiting["detail"], "permission")
+        delayed = self.fire("waiting", "Notification", notification_type="permission_prompt",
+                            message="Claude needs your permission to use Bash")
+        self.assertEqual(delayed["ts"], waiting["ts"], "the delayed notification keeps the request clock")
         self.assertNotIn("Bash", self.path.read_text())
-        resumed = self.fire("resume", "PreToolUse", tool_name="Bash")
+        self.assertNotIn("rm -rf", self.path.read_text())
+        resumed = self.fire("resume", "PostToolUse", tool_name="Bash")
         self.assertEqual(resumed["state"], "working")
         self.assertEqual(resumed["detail"], "")
+
+    def test_next_tool_call_also_resumes(self):
+        self.fire("waiting", "Notification", notification_type="permission_prompt")
+        self.assertEqual(self.fire("resume", "PreToolUse", tool_name="Read")["state"], "working")
+
+    def test_subagent_tool_calls_do_not_answer_the_main_thread(self):
+        self.fire("waiting", "PermissionRequest", tool_name="Bash")
+        still = self.fire("resume", "PreToolUse", tool_name="Read", agent_id="agent-1", agent_type="Explore")
+        self.assertEqual(still["state"], "waiting")
+        still = self.fire("resume", "PostToolUse", tool_name="Read", agent_id="agent-1", agent_type="Explore")
+        self.assertEqual(still["state"], "waiting")
+
+    def test_question_stays_an_input_request(self):
+        self.fire("working", "UserPromptSubmit")
+        asked = self.fire("waiting", "PermissionRequest", tool_name="AskUserQuestion",
+                          tool_input={"questions": [{"question": "Secret?"}]})
+        self.assertEqual(asked["detail"], "input")
+        self.assertNotIn("Secret", self.path.read_text())
+        repeated = self.fire("waiting", "Notification", notification_type="permission_prompt",
+                             message="Claude needs your permission")
+        self.assertEqual(repeated["detail"], "input")
+        self.assertEqual(repeated["ts"], asked["ts"])
+        self.assertEqual(self.fire("resume", "PostToolUse", tool_name="AskUserQuestion")["detail"], "")
+        self.assertEqual(self.fire("waiting", "PermissionRequest", tool_name="Bash")["detail"], "permission")
 
     def test_tool_calls_while_working_are_free(self):
         first = self.fire("working", "UserPromptSubmit")

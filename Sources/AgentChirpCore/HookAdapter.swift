@@ -93,12 +93,24 @@ public enum HookAdapter {
             extra = ["turn_id": turn, "pending_tools": pending, "pending_kinds": kinds, "model": inherited("model")]
         } else {
             if state == "resume" {
+                // Claude Code sets agent_id only inside a subagent. A background agent's
+                // tool call is not the user's answer to the main thread's request.
+                if !string("agent_id", in: hook).isEmpty { return "" }
                 if !previousState.isEmpty && previousState != "waiting" { return "" }
                 state = "working"
             }
             if state == "waiting" && previousState == "done" { return "" }
             if state == "idle" && ["working", "waiting"].contains(previousState) { return "" }
-            if state == "waiting" { detail = string("notification_type", in: hook) == "elicitation_dialog" ? "input" : "permission" }
+            if state == "waiting" {
+                // AskUserQuestion reaches hooks as a permission request and a permission_prompt
+                // notification. Keep a question's kind when the later notification repeats it.
+                let message = string("message", in: hook).lowercased()
+                let question = string("notification_type", in: hook) == "elicitation_dialog"
+                    || string("tool_name", in: hook) == "AskUserQuestion"
+                    || message.contains("waiting for your input") || message.contains("question")
+                    || (previousState == "waiting" && string("detail", in: previous) == "input")
+                detail = question ? "input" : "permission"
+            }
         }
         let now = Date().timeIntervalSince1970
         let ts = previousState == state && sameTurn ? previous["ts"] as? Double ?? now : now

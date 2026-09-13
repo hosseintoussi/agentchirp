@@ -10,43 +10,34 @@ func renderMenuSnapshots(to dir: String) {
     let now = Date().timeIntervalSince1970
     let sessions = [
         Session(id: "s1", state: "waiting", ts: now - 154, cwd: "/Users/dev/code/api-gateway",
-                transcriptPath: "", totalTokens: 184_000, inputTokens: 12_400, outputTokens: 8_200,
-                cacheTokens: 163_400, model: "claude-opus-4-8", tty: "/dev/ttys004", terminal: "iTerm2",
+                transcriptPath: "", model: "claude-opus-4-8", tty: "/dev/ttys004", terminal: "iTerm2",
                 detail: "Claude needs your permission to use Bash"),
         Session(id: "s2", state: "working", ts: now - 2_115, cwd: "/Users/dev/code/agentchirp",
-                transcriptPath: "", totalTokens: 1_432_000, inputTokens: 84_200, outputTokens: 41_700,
-                cacheTokens: 1_306_100, model: "gpt-6-astra", tty: "/dev/ttys007", terminal: "iTerm2", provider: .codex),
+                transcriptPath: "", model: "gpt-6-astra", tty: "/dev/ttys007", terminal: "iTerm2", provider: .codex),
         Session(id: "s3", state: "idle", ts: now - 7_300, cwd: "/Users/dev/code/agentchirp-site",
-                transcriptPath: "", totalTokens: 52_300, inputTokens: 4_100, outputTokens: 2_900,
-                cacheTokens: 45_300, model: "claude-sonnet-4-6", tty: "", terminal: ""),
+                transcriptPath: "", model: "claude-sonnet-4-6", tty: "", terminal: ""),
     ]
     let twoAsks = [
         Session(id: "a1", state: "waiting", ts: now - 610, cwd: "/Users/dev/code/billing",
-                transcriptPath: "", totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0,
-                model: "gpt-6-astra", tty: "/dev/ttys002", terminal: "Terminal", provider: .codex,
+                transcriptPath: "", model: "gpt-6-astra", tty: "/dev/ttys002", terminal: "Terminal", provider: .codex,
                 detail: "Bash: git push origin main"),
         Session(id: "a2", state: "waiting", ts: now - 40, cwd: "/Users/dev/code/docs-site",
-                transcriptPath: "", totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0,
-                model: "claude-opus-4-8", tty: "/dev/ttys003", terminal: "iTerm2",
+                transcriptPath: "", model: "claude-opus-4-8", tty: "/dev/ttys003", terminal: "iTerm2",
                 detail: "Claude is waiting for your input"),
         sessions[1],
         Session(id: "a3", state: "working", ts: now - 30, cwd: "/Users/dev/work/app",
-                transcriptPath: "", totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0,
-                model: "claude-sonnet-4-6", tty: "/dev/ttys008", terminal: "iTerm2"),
+                transcriptPath: "", model: "claude-sonnet-4-6", tty: "/dev/ttys008", terminal: "iTerm2"),
         Session(id: "a4", state: "idle", ts: now - 400, cwd: "/Users/dev/personal/app",
-                transcriptPath: "", totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0,
-                model: "claude-sonnet-4-6", tty: "/dev/ttys009", terminal: "iTerm2"),
+                transcriptPath: "", model: "claude-sonnet-4-6", tty: "/dev/ttys009", terminal: "iTerm2"),
     ]
     let finished = [
         Session(id: "f1", state: "idle", ts: now - 3, cwd: "/Users/dev/code/api-gateway",
-                transcriptPath: "", totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0,
-                model: "claude-opus-4-8", tty: "/dev/ttys004", terminal: "iTerm2", lastEvent: "Stop"),
+                transcriptPath: "", model: "claude-opus-4-8", tty: "/dev/ttys004", terminal: "iTerm2", lastEvent: "Stop"),
         sessions[1],
     ]
     let overflow = (0..<12).map { index in
         Session(id: "fixture-\(index)", state: index < 2 ? "waiting" : "working", ts: now - 90 - Double(index) * 37,
-                cwd: "/Users/dev/code/project-\(index)", transcriptPath: "", totalTokens: 0, inputTokens: 0,
-                outputTokens: 0, cacheTokens: 0, model: "claude-sonnet-4-6", tty: "/dev/ttys01\(index % 10)",
+                cwd: "/Users/dev/code/project-\(index)", transcriptPath: "", model: "claude-sonnet-4-6", tty: "/dev/ttys01\(index % 10)",
                 terminal: "iTerm2", detail: index == 0 ? "Claude needs your permission to use Edit" : "")
     }
     let scenarios: [(String, [Session])] = [
@@ -127,13 +118,11 @@ func checkDashboardInteractions() {
     }
     NSApp.setActivationPolicy(.accessory)
     NSApp.finishLaunching()
-    func session(_ id: String, _ state: String, tokens: Int = 100, terminal: String = "Terminal",
+    func session(_ id: String, _ state: String, terminal: String = "Terminal",
                  provider: AgentProvider = .claude, age: TimeInterval = 90, cwd: String? = nil,
                  detail: String = "", lastEvent: String = "") -> Session {
         Session(id: id, state: state, ts: Date().timeIntervalSince1970 - age,
-                cwd: cwd ?? "/tmp/\(id)", transcriptPath: "", totalTokens: tokens,
-                inputTokens: tokens, outputTokens: 0, cacheTokens: 0,
-                model: "claude-sonnet-4-6", tty: "/dev/ttys001", terminal: terminal, provider: provider,
+                cwd: cwd ?? "/tmp/\(id)", transcriptPath: "", model: "claude-sonnet-4-6", tty: "/dev/ttys001", terminal: terminal, provider: provider,
                 lastEvent: lastEvent, detail: detail)
     }
     func descendants(_ view: NSView) -> [NSView] {
@@ -171,7 +160,8 @@ func checkDashboardInteractions() {
     check(unavailable.toolTip?.contains("Other can't be focused") == true, "Tooltip explains the missing terminal target")
     check(openButtons[0].frame.height == 64, "Rows must stay compact")
     check(openButtons[0].hitTest(NSPoint(x: openButtons[0].frame.minX + 30, y: openButtons[0].frame.minY + 15)) === openButtons[0], "The whole row is actionable")
-    check(openButtons[0].toolTip?.contains("100 in") == true, "Usage must be available on hover")
+    check(openButtons[0].toolTip?.contains("/tmp/project") == true, "The full path must be available on hover")
+    check(openButtons[0].toolTip?.contains(" in ·") == false, "Token usage is no longer collected or shown")
     check(openButtons[0].accessibilityLabel()?.contains("Needs permission") == true,
                  "VoiceOver hears the ask")
 
@@ -217,10 +207,10 @@ func checkDashboardInteractions() {
     // Live ticks preserve controls and the window; state changes rebuild in place.
     let compactHeight = dashboard.view.frame.height
     let sameButton = buttons().first { $0.title == "Open" && $0.isEnabled }!
-    dashboard.refresh([session("project", "waiting", tokens: 200, detail: "Claude needs your permission to use Bash"), initial[1]], muted: muted)
-    check(buttons().contains { $0 === sameButton }, "Usage ticks must preserve controls")
-    check(sameButton.toolTip?.contains("200 in") == true, "Usage tooltip must refresh without replacing rows")
-    check(dashboard.view.frame.height == compactHeight, "Usage updates preserve window height")
+    dashboard.refresh([session("project", "waiting", detail: "Claude needs your permission to use Bash"), initial[1]], muted: muted)
+    check(buttons().contains { $0 === sameButton }, "Live ticks must preserve controls")
+    check(sameButton.toolTip?.contains("/tmp/project") == true, "Tooltip survives a live tick without replacing rows")
+    check(dashboard.view.frame.height == compactHeight, "Live updates preserve window height")
     dashboard.refresh([session("project", "working"), session("rest", "idle", age: 3000)], muted: muted)
     check(texts().contains("1 working") && texts().contains("1 idle · nothing needs you"), "Header follows state")
     check(rows().map { $0.identifier!.rawValue } == ["project", "rest"], "Working precedes idle")
@@ -392,8 +382,8 @@ func checkDashboardInteractions() {
     actionable.keyDown(with: enter)
     check(activated, "Return opens the focused session")
     let originalFrame = anchored.view.window!.frame
-    anchored.refresh(initial.map { session($0.id, $0.state.rawValue, tokens: 300, terminal: $0.terminal, age: 500, detail: $0.detail) }, muted: false)
-    check(anchored.view.window!.frame == originalFrame, "Usage updates must keep the actual popover anchored")
+    anchored.refresh(initial.map { session($0.id, $0.state.rawValue, terminal: $0.terminal, age: 500, detail: $0.detail) }, muted: false)
+    check(anchored.view.window!.frame == originalFrame, "Live updates must keep the actual popover anchored")
     anchored.refresh(initial + (0..<20).map { session("arrival-\($0)", "working") }, muted: false)
     check(anchored.view.window!.frame == originalFrame, "Live arrivals must not resize an open popover")
     popover.close()

@@ -383,7 +383,7 @@ final class DashboardController: NSViewController {
         }
         currentSessions = sessions; currentMuted = muted
         let summary = ConsoleSummary(sessions, watching: watchedProviders, now: now)
-        // Token and clock updates never replace focused controls or move the scroll position.
+        // Clock updates never replace focused controls or move the scroll position.
         let next = Signature(rows: sessions.map(SessionPresentation.init), headline: summary.headline,
                              subline: summary.subline, muted: muted, keepAwake: keepAwake)
         if next != signature {
@@ -403,8 +403,6 @@ final class DashboardController: NSViewController {
     }
 
     private func tooltip(_ session: Session) -> String {
-        let usage = session.totalTokens == 0 ? "" :
-            "\n\(fmtK(session.inputTokens)) in · \(fmtK(session.outputTokens)) out · \(fmtK(session.cacheTokens)) cached"
         let action: String
         if AppDelegate.focusableTerminals.contains(session.terminal) && !session.tty.isEmpty {
             action = "Open in \(session.terminal)"
@@ -413,7 +411,7 @@ final class DashboardController: NSViewController {
         } else {
             action = "\(session.terminal) can't be focused"
         }
-        return "\(action)\n\(session.cwd)\(usage)"
+        return "\(action)\n\(session.cwd)"
     }
 
     private func rebuild(_ allSessions: [Session], summary: ConsoleSummary) {

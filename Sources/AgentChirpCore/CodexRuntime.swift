@@ -119,8 +119,6 @@ public final class CodexRuntimeOverlay {
             let event = hook?.state == thread.state && validCompletion(hook!) ? hook!.lastEvent.rawValue : ""
             sessions[thread.id] = Session(id: thread.id, state: thread.state.rawValue, ts: ts,
                 cwd: hook?.cwd ?? thread.cwd, transcriptPath: hook?.transcriptPath ?? thread.transcript,
-                totalTokens: hook?.totalTokens ?? 0, inputTokens: hook?.inputTokens ?? 0,
-                outputTokens: hook?.outputTokens ?? 0, cacheTokens: hook?.cacheTokens ?? 0,
                 model: hook?.model.isEmpty == false ? hook!.model : thread.model,
                 tty: hook?.tty ?? "", terminal: hook?.terminal ?? "", provider: .codex,
                 lastEvent: event, detail: thread.detail, runtimeStatusVerified: true, codexServerBacked: true,
@@ -130,9 +128,7 @@ public final class CodexRuntimeOverlay {
         // Apply the same completion boundary to hook fallback during a disconnect.
         for hook in hooks where !live.contains(hook.id) && !validCompletion(hook) {
             sessions[hook.id] = Session(id: hook.id, state: hook.state.rawValue, ts: hook.ts,
-                cwd: hook.cwd, transcriptPath: hook.transcriptPath, totalTokens: hook.totalTokens,
-                inputTokens: hook.inputTokens, outputTokens: hook.outputTokens, cacheTokens: hook.cacheTokens,
-                model: hook.model, tty: hook.tty, terminal: hook.terminal, provider: hook.provider,
+                cwd: hook.cwd, transcriptPath: hook.transcriptPath, model: hook.model, tty: hook.tty, terminal: hook.terminal, provider: hook.provider,
                 detail: hook.detail, transcriptModifiedAt: hook.transcriptModifiedAt, codexServerBacked: hook.codexServerBacked)
         }
         if runtime != nil {
@@ -190,10 +186,7 @@ public final class CodexRuntimeOverlay {
             }
             guard let client else { return session }
             return Session(id: session.id, state: session.state.rawValue, ts: session.ts,
-                cwd: session.cwd, transcriptPath: session.transcriptPath,
-                totalTokens: session.totalTokens, inputTokens: session.inputTokens,
-                outputTokens: session.outputTokens, cacheTokens: session.cacheTokens,
-                model: session.model, tty: client.tty, terminal: client.terminal,
+                cwd: session.cwd, transcriptPath: session.transcriptPath, model: session.model, tty: client.tty, terminal: client.terminal,
                 provider: session.provider, lastEvent: session.lastEvent.rawValue, detail: session.detail,
                 transcriptModifiedAt: session.transcriptModifiedAt,
                 runtimeStatusVerified: session.runtimeStatusVerified, codexServerBacked: true,
