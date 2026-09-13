@@ -55,18 +55,24 @@ Requires macOS 13 or later. One app runs on Apple Silicon and Intel Macs.
 1. Download [AgentChirp.dmg](https://github.com/hosseintoussi/agentchirp/releases/latest/download/AgentChirp.dmg).
 2. Drag **AgentChirp** into **Applications** and open it.
 3. Review the integration status in the welcome window. Enable **Launch AgentChirp at login** if you want it ready when you sign in.
+4. **If you use Codex:** open Codex in your terminal, enter `/hooks`, and review and trust the AgentChirp entries. If they are missing, restart Codex and open `/hooks` again.
 
 The direct download becomes available with the first signed app release. Release
 apps are signed with Developer ID, notarized by Apple, and include the native
 hook helper. No Homebrew, Python, Xcode, or terminal installation commands are needed.
 macOS may show its normal confirmation the first time you open a downloaded app.
 
+**Codex remembers your hook trust—you do not need to repeat this every session.**
+New or changed hook definitions require another review; Codex shows a startup
+warning when this is needed. Until trusted, those hooks will not run. Installing
+AgentChirp does not approve them automatically.
+
 Claude Code hooks are configured automatically when its home directory is present.
-Codex requires you to review the installed entries in `/hooks`; AgentChirp never
-changes hook trust or approval policy. If neither tool is present, AgentChirp
+AgentChirp never changes Codex hook trust or approval policy. If neither tool is present, AgentChirp
 still installs and shows links to get Claude Code or Codex. Either one is enough.
 Install and open the tool once; AgentChirp detects its newly created home within
-10 seconds and configures the integration. **Check again** retries immediately.
+10 seconds and configures the integration. If you add Codex later, complete step 4
+after it is detected. **Check again** in AgentChirp Settings retries setup immediately.
 It does not install either agent or start a server while waiting for a tool.
 
 ### Settings and updates
@@ -148,6 +154,8 @@ that environment variable.
 **To activate:** restart Codex if needed, open `/hooks`, and review/trust the
 agentchirp entries. Then start or resume a session. Codex skips untrusted hooks;
 installing AgentChirp alone does not approve them.
+Trust is remembered across sessions. You only need to review again if new hook
+definitions are added or existing definitions change; Codex warns you at startup.
 
 The adapter observes session start/end, prompts, tool calls, permission requests,
 completion, and interruption. Supported input-question tool calls also appear as
