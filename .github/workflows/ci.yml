@@ -6,14 +6,45 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Build
         run: swift build -c release
 
       - name: Test
-        run: swift run CCBeaconTests
+        run: |
+          swift run AgentChirpTests
+          bash -n agentchirp.sh
+          python3 Tests/Hooks/test_codex.py
+          python3 Tests/Hooks/test_claude.py
+          python3 Tests/Release/test_release.py
+          python3 Tests/CodexRuntime/test_runtime.py
+          python3 Tests/CodexRuntime/test_launcher.py
+
+      - name: Native UI and popover layout regressions
+        run: |
+          if .build/release/agentchirp --ui-check; then
+            exit 0
+          fi
+          # Preserve a failing check while exposing native traps and force unwraps.
+          lldb --batch -o run -k 'thread backtrace all' -- .build/release/agentchirp --ui-check
+          exit 1
+
+      - name: App bundle and installation checks
+        run: |
+          python3 scripts/package_app.py --development
+          python3 Tests/Release/test_bundle.py dist/AgentChirp.app
+          dist/AgentChirp.app/Contents/MacOS/agentchirp --installation-check
+          python3 -m venv .build/packaging-venv
+          .build/packaging-venv/bin/pip install -r Packaging/requirements.txt
+          python3 scripts/distribute.py --development
+          python3 Tests/Release/test_dmg.py
