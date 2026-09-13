@@ -257,7 +257,7 @@ final class SessionRow: ActionButton {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 { performClick(nil); return }
         if event.keyCode == 125 || event.keyCode == 126,
-           let rows = superview?.subviews.compactMap({ $0 as? SessionRow }),
+           let rows = superview?.subviews.compactMap({ $0 as? SessionRow }).filter({ $0.isEnabled }),
            let index = rows.firstIndex(where: { $0 === self }) {
             let next = min(max(0, index + (event.keyCode == 125 ? 1 : -1)), rows.count - 1)
             window?.makeFirstResponder(rows[next])
@@ -268,7 +268,7 @@ final class SessionRow: ActionButton {
     }
     override func draw(_ dirtyRect: NSRect) {
         let focused = window?.firstResponder === self
-        if hovering || isHighlighted || focused {
+        if isEnabled && (hovering || isHighlighted || focused) {
             neutralFill(isHighlighted ? 0.12 : 0.06).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 2), xRadius: 6, yRadius: 6).fill()
         }
@@ -310,7 +310,6 @@ final class DashboardController: NSViewController {
     private var pendingOffset: CGFloat?
     private var presentationListHeight: CGFloat?
     private var presentationScreenHeight: CGFloat?
-    private var copiedUntil: [String: Date] = [:]
     /// Providers whose hook directories exist; the empty state reports them.
     var watchedProviders: [AgentProvider] = [.claude, .codex]
 
@@ -368,7 +367,6 @@ final class DashboardController: NSViewController {
     }
 
     private func clockText(_ session: Session, now: TimeInterval = Date().timeIntervalSince1970) -> String {
-        if let until = copiedUntil[session.id], until > Date() { return "Copied" }
         return stateClock(session.state, elapsed: max(0, Int(now - session.ts)))
     }
 
@@ -411,9 +409,9 @@ final class DashboardController: NSViewController {
         if AppDelegate.focusableTerminals.contains(session.terminal) && !session.tty.isEmpty {
             action = "Open in \(session.terminal)"
         } else if session.terminal.isEmpty {
-            action = "Copy project path · terminal not detected"
+            action = "Terminal not detected"
         } else {
-            action = "Copy project path · \(session.terminal) can't be focused"
+            action = "\(session.terminal) can't be focused"
         }
         return "\(action)\n\(session.cwd)\(usage)"
     }
@@ -514,26 +512,17 @@ final class DashboardController: NSViewController {
     private func accessibilityText(_ session: Session, now: TimeInterval = Date().timeIntervalSince1970) -> String {
         let ask = session.state == .waiting ? ", \(waitingSummary(session.detail))" : ""
         let canFocus = !session.tty.isEmpty && AppDelegate.focusableTerminals.contains(session.terminal)
-        let outcome = canFocus ? "Opens in \(session.terminal)." : "Copies the project path."
+        let outcome = canFocus ? "Opens in \(session.terminal)." : "Terminal unavailable."
         return "\(displayName(session)), \(session.provider.title) \(cleanModel(session.model)), \(clockText(session, now: now))\(ask). \(outcome)"
     }
 
     private func row(_ session: Session, y: CGFloat, summary: ConsoleSummary) -> NSView {
         let canFocus = !session.tty.isEmpty && AppDelegate.focusableTerminals.contains(session.terminal)
-        let card = SessionRow(canFocus ? "Open" : "Copy path") { [weak self] in
-            guard let self else { return }
-            if canFocus { self.onFocus?(session); return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.cwd, forType: .string)
-            // Say that something happened: the clock reads "Copied" for a moment.
-            self.copiedUntil[session.id] = Date(timeIntervalSinceNow: 1.5)
-            self.clockLabels[session.id]?.stringValue = "Copied"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
-                guard let self else { return }
-                self.copiedUntil.removeValue(forKey: session.id)
-                self.refresh(self.currentSessions, muted: self.currentMuted)
-            }
+        let card = SessionRow(canFocus ? "Open" : "") { [weak self] in
+            guard canFocus else { return }
+            self?.onFocus?(session)
         }
+        card.isEnabled = canFocus
         card.isBordered = false
         card.focusRingType = .none
         card.frame = NSRect(x: 8, y: y, width: 384, height: sessionRowHeight)
@@ -559,11 +548,12 @@ final class DashboardController: NSViewController {
         let contextLine = context.isEmpty ? session.provider.title : "\(session.provider.title) · \(context)"
         label(contextLine, in: card, x: 24, y: 33, w: 316, size: 12, color: .secondaryLabelColor)
 
-        let glyph = NSImageView(frame: NSRect(x: 352, y: 35, width: 12, height: 12))
-        glyph.image = NSImage(systemSymbolName: canFocus ? "arrow.up.forward" : "doc.on.clipboard",
-                              accessibilityDescription: nil)
-        glyph.contentTintColor = .secondaryLabelColor
-        card.addSubview(glyph)
+        if canFocus {
+            let glyph = NSImageView(frame: NSRect(x: 352, y: 35, width: 12, height: 12))
+            glyph.image = NSImage(systemSymbolName: "arrow.up.forward", accessibilityDescription: nil)
+            glyph.contentTintColor = .secondaryLabelColor
+            card.addSubview(glyph)
+        }
 
         card.setAccessibilityLabel(accessibilityText(session))
         card.toolTip = tooltip(session)

@@ -58,8 +58,8 @@ accent, filled green, or a hollow ring), the project name, and a verb clock on t
 right ("waiting 2m", "working 35m", "idle 2h 1m"). Line two: the provider and, for a
 waiting session, what it is asking for ("Needs permission", "Waiting for
 your answer"); otherwise the model. Projects with the same folder name show their
-parent folder. The whole row is one button that opens the terminal or, for
-unsupported terminals, copies the path and says "Copied" in the clock. Hover shows
+parent folder. The whole row opens its terminal when available; rows without a supported
+terminal have no action or action icon. Hover shows
 the full path and token usage. Arrow keys move between rows; Return activates;
 keyboard focus draws the system focus ring.
 
@@ -91,7 +91,7 @@ enters the update request.
 The console keeps its three captioned controls. Its existing bird is also the
 Settings button, with a tooltip, accessibility label, and Command-comma shortcut.
 Opening AgentChirp again from Applications also opens Settings. This separate
-window owns setup, login launch, updates, and Open Codex. The launcher is included
-in setup; users choose a project, not an installation directory. Neither tool is
+window owns setup, login launch, and updates, with Done to close it.
+Users start their agents from their terminal. Neither tool is
 required to install AgentChirp. Missing tools get installation links, and newly
 initialized tools are picked up automatically without restarting AgentChirp.

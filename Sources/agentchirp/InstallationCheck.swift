@@ -45,11 +45,11 @@ func checkInstallation(to directory: String?) {
     let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     process.waitUntilExit()
     installationAssert(process.terminationStatus == 0 && text == project.path + "\n" + customHome.path + "\n", "Terminal launch must preserve paths and custom Codex home")
-    var login = false, automatic = true, retries = 0, checks = 0, launches = 0, finished = false
+    var login = false, automatic = true, retries = 0, checks = 0, finished = false
     var requestedTools: [AgentProvider] = []
     let ready: [IntegrationSetupResult] = [
         .init(provider: .claude, message: "Ready for new sessions. Restart an existing Claude Code session to load its hooks.", needsAttention: false, installed: true),
-        .init(provider: .codex, message: "Choose Open Codex to start a session. In Codex, open /hooks and review the AgentChirp entries.", needsAttention: false, installed: true)
+        .init(provider: .codex, message: "Start Codex in your terminal. In Codex, open /hooks and review the AgentChirp entries.", needsAttention: false, installed: true)
     ]
     let setup = SetupWindowController(actions: SetupActions(
         retry: { retries += 1; return ready }, loginEnabled: { login },
@@ -57,10 +57,8 @@ func checkInstallation(to directory: String?) {
         setLogin: { login = $0 }, updatesAvailable: true,
         updateMessage: "Updates are checked securely. Session data stays on your Mac.",
         automaticUpdates: { automatic }, setAutomaticUpdates: { automatic = $0 },
-        checkUpdates: { checks += 1 }, openCodex: { _ in launches += 1 }, getTool: { requestedTools.append($0) }, finish: { finished = true }))
+        checkUpdates: { checks += 1 }, getTool: { requestedTools.append($0) }, finish: { finished = true }))
     setup.present(results: ready, firstRun: true)
-    setup.command.performClick(nil)
-    installationAssert(launches == 1)
     setup.login.performClick(nil)
     installationAssert(login, "Login control did not register the user's preference")
     setup.login.performClick(nil)
@@ -120,11 +118,11 @@ func checkInstallation(to directory: String?) {
         }
     }
     setup.present(results: missing, firstRun: true)
-    installationAssert(!setup.command.isEnabled && setup.getToolButtons.count == 2, "Missing tools must show installation links and disable launching")
+    installationAssert(setup.getToolButtons.count == 2, "Missing tools must show installation links")
     setup.getToolButtons.forEach { $0.performClick(nil) }
     installationAssert(requestedTools == [.claude, .codex], "Get-tool actions must identify the selected provider")
     setup.refreshIntegrations(added)
-    installationAssert(setup.command.isEnabled && setup.getToolButtons.count == 1, "Late tool detection must update the open setup window")
+    installationAssert(setup.getToolButtons.count == 1, "Late tool detection must update the open setup window")
     setup.done.performClick(nil)
     installationAssert(finished && !setup.window!.isVisible)
     print("Installation controls and light/dark layouts passed; no real setup effects ran.")

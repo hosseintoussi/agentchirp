@@ -76,12 +76,13 @@ public final class CodexRuntimeClient {
 
 public final class CodexRuntimeOverlay {
     private var clocks: [String: (SessionState, String, TimeInterval)] = [:]
+    private var clientsByThread: [String: CodexTerminalClient] = [:]
     public init() {}
-    public func merge(_ hooks: [Session], runtime: [CodexRuntimeThread]?, now: TimeInterval = Date().timeIntervalSince1970) -> [Session] {
-        guard let runtime else { clocks.removeAll(); return hooks }
+    public func merge(_ hooks: [Session], runtime: [CodexRuntimeThread]?, now: TimeInterval = Date().timeIntervalSince1970, clients: [CodexTerminalClient]? = nil) -> [Session] {
+        if runtime == nil { clocks.removeAll() }
         var sessions = Dictionary(hooks.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
         var live: Set<String> = []
-        for thread in runtime {
+        for thread in runtime ?? [] {
             live.insert(thread.id)
             let hook = sessions[thread.id]
             let previous = clocks[thread.id]
@@ -98,9 +99,47 @@ public final class CodexRuntimeOverlay {
                 outputTokens: hook?.outputTokens ?? 0, cacheTokens: hook?.cacheTokens ?? 0,
                 model: hook?.model.isEmpty == false ? hook!.model : thread.model,
                 tty: hook?.tty ?? "", terminal: hook?.terminal ?? "", provider: .codex,
-                lastEvent: event, detail: thread.detail, runtimeStatusVerified: true)
+                lastEvent: event, detail: thread.detail, runtimeStatusVerified: true, codexServerBacked: true)
         }
         clocks = clocks.filter { live.contains($0.key) }
-        return consoleOrder(Array(sessions.values))
+        return consoleOrder(resolveClients(Array(sessions.values), clients: clients))
     }
+
+    private func resolveClients(_ sessions: [Session], clients: [CodexTerminalClient]?) -> [Session] {
+        // Failed process inspection must not make sessions disappear.
+        guard let clients else { return sessions }
+        func project(_ path: String) -> String {
+            URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        let serverSessions = sessions.filter { $0.codexServerBacked }
+        let byProject = Dictionary(grouping: serverSessions, by: { project($0.cwd) })
+        let clientProjects = Dictionary(grouping: clients, by: { project($0.cwd) })
+        let ids = Set(sessions.map(\.id))
+        clientsByThread = clientsByThread.filter { ids.contains($0.key) }
+        return sessions.compactMap { session in
+            guard session.codexServerBacked else { return session }
+            let previous = clientsByThread[session.id]
+            let candidates = clientProjects[project(session.cwd)] ?? []
+            var client = previous.flatMap { old in clients.first { $0 == old } }
+            if client == nil && previous != nil && session.state == .idle { return nil }
+            // Both sides must be unique. A shared project directory is not a session ID.
+            if client == nil && candidates.count == 1 && byProject[project(session.cwd)]?.count == 1 {
+                client = candidates[0]
+                clientsByThread[session.id] = client
+            }
+            if client == nil && session.state == .idle && (previous != nil || candidates.isEmpty) {
+                return nil // A daemon's cached idle thread is not an open terminal session.
+            }
+            guard let client else { return session }
+            return Session(id: session.id, state: session.state.rawValue, ts: session.ts,
+                cwd: session.cwd, transcriptPath: session.transcriptPath,
+                totalTokens: session.totalTokens, inputTokens: session.inputTokens,
+                outputTokens: session.outputTokens, cacheTokens: session.cacheTokens,
+                model: session.model, tty: client.tty, terminal: client.terminal,
+                provider: session.provider, lastEvent: session.lastEvent.rawValue, detail: session.detail,
+                transcriptModifiedAt: session.transcriptModifiedAt,
+                runtimeStatusVerified: session.runtimeStatusVerified, codexServerBacked: true)
+        }
+    }
+
 }

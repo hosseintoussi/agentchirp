@@ -584,6 +584,60 @@ suite("Codex live runtime status") {
            "unknown flags never imply an answered request")
 }
 
+suite("Codex terminal ownership") {
+    let snapshot = AgentProcessSnapshot("""
+    90 80 ?? /bin/bash
+    80 70 ?? /opt/codex-code-mode-host
+    70 60 ttys003  codex
+    60 50 ttys003 -zsh
+    50 1 ?? /Library/Application Support/iTerm2/iTermServer-3.6.11
+    91 81 ?? /bin/bash
+    81 1 ?? /opt/codex
+    """)
+    let owner = snapshot.ancestry(from: 90, provider: .codex)
+    expect(owner.pid, 70, "Codex helper is not the session owner")
+    expect(owner.tty, "/dev/ttys003", "terminal is recovered through helper ancestry")
+    expect(owner.terminal, "iTerm2", "reparented iTerm server remains recognizable")
+    expect(snapshot.ancestry(from: 91, provider: .codex).tty, "", "daemon never inherits another client's terminal")
+    expect(AgentProcessSnapshot.projectDirectory(cwd: "/tmp", arguments: ["codex", "--cd", "/tmp/project"]),
+           "/tmp/project", "explicit project directory is respected")
+    expect(AgentProcessSnapshot.projectDirectory(cwd: "/tmp", arguments: ["codex", "-C", "project"]),
+           "/tmp/project", "relative project directory resolves against client cwd")
+    func thread(_ id: String = "live", state: String = "idle") -> CodexRuntimeThread {
+        CodexRuntimeThread(["id": id, "cwd": "/tmp/live", "status": ["type": state, "activeFlags": []]])!
+    }
+    let client = CodexTerminalClient(pid: 42, startedAt: 10, cwd: "/tmp/live", tty: "/dev/ttys003", terminal: "iTerm2")
+    let overlay = CodexRuntimeOverlay()
+    let open = overlay.merge([], runtime: [thread()], clients: [client])
+    expect(open.first?.terminal ?? "", "iTerm2", "plain daemon-backed Codex gets its iTerm target")
+    expect(open.first?.tty ?? "", "/dev/ttys003", "plain Codex gets the client tty")
+    expect(overlay.merge([], runtime: [thread()], clients: []).count, 0, "closing the client removes a cached idle thread")
+    expect(overlay.merge([], runtime: [thread()], clients: nil).count, 1, "failed process scan does not remove sessions")
+    expect(overlay.merge([], runtime: [thread(state: "active")], clients: []).count, 1, "detached work remains visible")
+    let other = CodexTerminalClient(pid: 43, startedAt: 11, cwd: "/tmp/live", tty: "/dev/ttys004", terminal: "Terminal")
+    let ambiguous = CodexRuntimeOverlay().merge([], runtime: [thread()], clients: [client, other])
+    expect(ambiguous.first?.tty ?? "", "", "multiple clients in one project never guess a terminal")
+    let twoThreads = CodexRuntimeOverlay().merge([], runtime: [thread(), thread("other")], clients: [client])
+    expect(twoThreads.allSatisfy { $0.tty.isEmpty }, true, "multiple threads never bind to a single client by directory")
+    // Bind one client, then close it while another same-project client and thread remain.
+    _ = overlay.merge([], runtime: [thread()], clients: [client])
+    let surviving = overlay.merge([], runtime: [thread(), thread("other")], clients: [other])
+    expect(surviving.contains { $0.id == "codex:live" }, false, "closed binding cannot jump to another same-project terminal")
+    let reused = CodexTerminalClient(pid: 42, startedAt: 99, cwd: "/tmp/live", tty: "/dev/ttys005", terminal: "Terminal")
+    expect(overlay.merge([], runtime: [thread(), thread("other")], clients: [reused]).contains { $0.id == "codex:live" },
+           false, "recycled PID is not the original terminal client")
+    expect(overlay.merge([], runtime: [thread()], clients: [reused]).count, 0,
+           "a new client cannot resurrect a previously closed idle thread")
+    let serverHook = Session(id: "codex:live", state: "idle", ts: 100, cwd: "/tmp/live", transcriptPath: "",
+        totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: .codex, codexServerBacked: true)
+    expect(CodexRuntimeOverlay().merge([serverHook], runtime: nil, clients: []).count, 0,
+           "daemon hook idle also disappears when runtime is disconnected")
+    let directHook = Session(id: "codex:direct", state: "idle", ts: 100, cwd: "/tmp/live", transcriptPath: "",
+        totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", tty: "/dev/ttys003", terminal: "iTerm2", provider: .codex)
+    expect(CodexRuntimeOverlay().merge([directHook], runtime: [], clients: []).count, 1,
+           "standalone hook sessions retain their independent process lifecycle")
+}
+
 suite("Installation readiness") {
     expect(ConsoleSummary([], watching: []).subline, "Open Settings to set up agents", "empty install does not claim an agent is connected")
     expect(ConsoleSummary([], watching: [.codex]).subline, "Watching Codex", "Codex-only install does not claim Claude is installed")

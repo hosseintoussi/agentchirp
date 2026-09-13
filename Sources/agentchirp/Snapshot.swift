@@ -142,15 +142,15 @@ func checkDashboardInteractions() {
     precondition(texts().contains { $0.hasPrefix("waiting ") }, "Clocks carry the state verb")
     precondition(rows()[0].identifier?.rawValue == "unsupported", "Longest-waiting session comes first")
 
-    // Terminal action and the copy fallback with visible feedback.
+    // Only rows with a terminal target offer an action.
     let openButtons = buttons().filter { $0.title == "Open" && $0.isEnabled }
     precondition(openButtons.count == 1, "Unsupported terminals must not offer a jump action")
     openButtons[0].performClick(nil)
     precondition(focused == "project", "Open button must target its own session")
-    let copyButton = buttons().first { $0.title == "Copy path" }!
-    copyButton.performClick(nil)
-    precondition(texts().contains("Copied"), "Copying must confirm inline")
-    precondition(copyButton.toolTip?.contains("Other can't be focused") == true, "Tooltip names the unsupported terminal")
+    let unavailable = rows().first { $0.identifier?.rawValue == "unsupported" }!
+    precondition(!unavailable.isEnabled, "Rows without terminal targets have no action")
+    precondition(unavailable.subviews.compactMap { $0 as? NSImageView }.isEmpty, "Unavailable rows have no action glyph")
+    precondition(unavailable.toolTip?.contains("Other can't be focused") == true, "Tooltip explains the missing terminal target")
     precondition(openButtons[0].frame.height == 64, "Rows must stay compact")
     precondition(openButtons[0].hitTest(NSPoint(x: openButtons[0].frame.minX + 30, y: openButtons[0].frame.minY + 15)) === openButtons[0], "The whole row is actionable")
     precondition(openButtons[0].toolTip?.contains("100 in") == true, "Usage must be available on hover")
@@ -334,12 +334,12 @@ func checkDashboardInteractions() {
 
     // Exercise the real anchored NSPopover as well as the standalone view.
     let anchored = DashboardController()
-    anchored.refresh(initial, muted: false)
+    anchored.refresh(initial + [session("keyboard-next", "working")], muted: false)
     let popover = NSPopover()
     popover.animates = false
     popover.contentViewController = anchored
     popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-    let anchoredRows = descendants(anchored.view).compactMap { $0 as? SessionRow }
+    let anchoredRows = descendants(anchored.view).compactMap { $0 as? SessionRow }.filter { $0.isEnabled }
     let window = anchored.view.window!
     precondition(window.makeFirstResponder(anchoredRows[0]), "Rows must accept keyboard focus")
     let down = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
@@ -443,7 +443,7 @@ func checkDashboardInteractions() {
     print("✓ Layout regression checks passed: repeated animated reopen, cached window size, anchoring, live removal, persistent scroll hierarchy, constrained bounds")
     NSStatusBar.system.removeStatusItem(delegate.statusItem)
     print("✓ Menu bar checks passed: breathing working beacon, steady idle beacon, finite attention flash, completion cue, tooltip")
-    print("✓ Native UI checks passed: state headline, asks on rows, verb clocks, ordering, terminal action, copy feedback, header controls, keep awake, live updates, completion, duplicate names, empty state, overflow, scroll preservation, keyboard")
+    print("✓ Native UI checks passed: state headline, asks on rows, verb clocks, ordering, terminal action, unavailable rows, header controls, keep awake, live updates, completion, duplicate names, empty state, overflow, scroll preservation, keyboard")
 }
 
 // Render the actual native mark at presentation and menu-bar sizes in both appearances.

@@ -45,13 +45,15 @@ public struct Session {
     public let lastEvent: SessionEvent
     /// Generic waiting kind (permission/input). Legacy raw details are sanitized at presentation.
     public let detail: String
+    public let codexServerBacked: Bool
     public let runtimeStatusVerified: Bool
 
     public init(id: String, state: String, ts: TimeInterval, cwd: String, transcriptPath: String,
                 totalTokens: Int, inputTokens: Int, outputTokens: Int, cacheTokens: Int,
                 model: String, tty: String = "", terminal: String = "",
-                provider: AgentProvider = .claude, lastEvent: String = "", detail: String = "", transcriptModifiedAt: TimeInterval? = nil, runtimeStatusVerified: Bool = false) {
+                provider: AgentProvider = .claude, lastEvent: String = "", detail: String = "", transcriptModifiedAt: TimeInterval? = nil, runtimeStatusVerified: Bool = false, codexServerBacked: Bool = false) {
         self.id = id; self.state = SessionState(rawValue: state) ?? .unknown; self.ts = ts; self.cwd = cwd
+        self.codexServerBacked = codexServerBacked
         self.runtimeStatusVerified = runtimeStatusVerified
         self.transcriptModifiedAt = transcriptModifiedAt
         self.transcriptPath = transcriptPath; self.totalTokens = totalTokens

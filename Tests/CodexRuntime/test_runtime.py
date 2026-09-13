@@ -4,6 +4,9 @@ import hashlib
 import json
 import os
 import pathlib
+import fcntl
+import pty
+import termios
 import socket
 import struct
 import subprocess
@@ -61,6 +64,22 @@ class RuntimeTests(unittest.TestCase):
             server = socket.socket(socket.AF_UNIX)
             server.bind(str(path))
             server.listen()
+            client = None
+            terminal_fds = None
+            if mode in ("idle-client", "closed-client"):
+                fake = home / "codex"
+                subprocess.run(["cc", "-x", "c", "-o", str(fake), "-"],
+                    input="#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+                    text=True, capture_output=True, check=True)
+                terminal_fds = pty.openpty()
+                def attach_terminal():
+                    os.setsid()
+                    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+                client = subprocess.Popen([str(fake), "30"], cwd=directory,
+                    stdin=terminal_fds[1], stdout=terminal_fds[1], stderr=terminal_fds[1], preexec_fn=attach_terminal)
+                if mode == "closed-client":
+                    client.terminate()
+                    client.wait(timeout=3)
             methods, errors = [], []
             def serve():
                 try:
@@ -99,8 +118,8 @@ class RuntimeTests(unittest.TestCase):
                                 result = {"data": ["root"], "nextCursor": None}
                             elif method == "thread/read":
                                 self.assertFalse(request["params"]["includeTurns"])
-                                result = {"thread": {"id": "root", "cwd": "/tmp/project", "source": "cli",
-                                                       "status": {"type": "active", "activeFlags": flags or []}}}
+                                result = {"thread": {"id": "root", "cwd": directory, "source": "cli",
+                                                       "status": {"type": "idle" if mode in ("idle-client", "closed-client") else "active", "activeFlags": flags or []}}}
                             else:
                                 raise AssertionError("Unexpected mutating request: " + method)
                             send(connection, {"id": request["id"], "result": result}, fragmented=True)
@@ -110,8 +129,17 @@ class RuntimeTests(unittest.TestCase):
                     errors.append(error)
             worker = threading.Thread(target=serve)
             worker.start()
-            result = subprocess.run([str(BINARY), "--codex-status"], env=dict(os.environ, CODEX_HOME=directory),
-                                    text=True, capture_output=True, timeout=5)
+            try:
+                result = subprocess.run([str(BINARY), "--codex-status"], env=dict(os.environ, CODEX_HOME=directory),
+                                        text=True, capture_output=True, timeout=5)
+            finally:
+                if client is not None:
+                    if client.poll() is None:
+                        client.terminate()
+                    client.wait(timeout=3)
+                if terminal_fds is not None:
+                    for fd in terminal_fds:
+                        os.close(fd)
             worker.join(timeout=4)
             server.close()
             self.assertFalse(worker.is_alive())
@@ -124,6 +152,16 @@ class RuntimeTests(unittest.TestCase):
             result = self.run_server(flags)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)[0]["state"], state)
+
+    def test_plain_client_terminal_and_exit(self):
+        opened = self.run_server(mode="idle-client")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        sessions = json.loads(opened.stdout)
+        self.assertEqual(len(sessions), 1)
+        self.assertTrue(sessions[0]["tty"].startswith("/dev/ttys"))
+        closed = self.run_server(mode="closed-client")
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertEqual(json.loads(closed.stdout), [])
 
     def test_disconnect_does_not_reuse_status(self):
         self.assertNotEqual(self.run_server(mode="disconnect").returncode, 0)

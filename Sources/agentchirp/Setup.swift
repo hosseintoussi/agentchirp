@@ -39,7 +39,7 @@ private func syncIntegration(provider: AgentProvider, home: String, userHome: St
                                helper: Data(contentsOf: helperURL), merge: merge)
         if provider == .codex { try installCodexLauncher(userHome: userHome) }
         return .init(provider: provider,
-                     message: provider == .codex ? "Choose Open Codex to start a session. In Codex, open /hooks and review the AgentChirp entries."
+                     message: provider == .codex ? "Start Codex in your terminal. In Codex, open /hooks and review the AgentChirp entries."
                         : "Ready for new sessions. Restart an existing Claude Code session to load its hooks.",
                      needsAttention: false, installed: true)
     } catch {

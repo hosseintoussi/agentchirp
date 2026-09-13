@@ -89,6 +89,7 @@ public enum HookAdapter {
         var record: [String: Any] = ["provider": provider.rawValue, "session_id": sid, "state": state,
             "ts": ts, "last_event": event, "detail": detail, "cwd": inherited("cwd"),
             "transcript_path": inherited("transcript_path"), "terminal": ancestry.terminal, "tty": ancestry.tty,
+            "codex_server_backed": provider == .codex && ancestry.pid > 0 && ancestry.tty.isEmpty,
             provider == .codex ? "agent_pid" : "claude_pid": ancestry.pid]
         record.merge(extra) { _, new in new }
         let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .prettyPrinted])
@@ -112,39 +113,7 @@ public enum HookAdapter {
     }
 
     private static func processInfo(provider: AgentProvider) -> (pid: Int, terminal: String, tty: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,ppid=,tty=,comm="]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return (0, "", "") }
-        let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1, execute: deadline)
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        deadline.cancel()
-        guard process.terminationStatus == 0 else { return (0, "", "") }
-        var table: [Int: (parent: Int, tty: String, command: String)] = [:]
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
-            let parts = line.split(maxSplits: 3, whereSeparator: { $0.isWhitespace })
-            if parts.count == 4, let pid = Int(parts[0]), let parent = Int(parts[1]) {
-                table[pid] = (parent, String(parts[2]), String(parts[3]))
-            }
-        }
-        var pid = Int(getppid()), agent = 0, terminal = "", device = ""
-        var seen: Set<Int> = []
-        while pid > 1, let row = table[pid], seen.insert(pid).inserted {
-            let base = (row.command as NSString).lastPathComponent.lowercased()
-            let matches = provider == .codex ? (base == "codex" || base.hasPrefix("codex-")) : (base.hasPrefix("claude") || base == "node")
-            if agent == 0 && matches {
-                agent = pid
-                if row.tty.hasPrefix("ttys") { device = "/dev/" + row.tty }
-            }
-            if base == "iterm2" { terminal = "iTerm2" }
-            if base == "terminal" { terminal = "Terminal" }
-            pid = row.parent
-        }
-        return (agent, terminal, device)
+        guard let snapshot = AgentProcessSnapshot.read() else { return (0, "", "") }
+        return snapshot.ancestry(from: Int(getppid()), provider: provider)
     }
 }

@@ -91,9 +91,13 @@ def package(development, identity, output):
         host = bins[architectures.index(platform.machine())] / "agentchirp"
         run(host, "--export-icon", iconset)
         run("iconutil", "-c", "icns", iconset, "-o", resources / "AgentChirp.icns")
-        signature = ["codesign", "--force", "--sign", identity, "--options", "runtime"]
+        signature = ["codesign", "--force", "--sign", identity]
         if identity != "-":
-            signature += ["--timestamp"]
+            signature += ["--options", "runtime", "--timestamp"]
+        # Ad-hoc previews have no Team ID for hardened library validation.
+        # Clear inherited runtime flags when re-signing Sparkle for local use.
+        else:
+            signature += ["--options", "0"]
         for target in [framework / "Versions/B/Autoupdate", framework / "Versions/B/Updater.app", framework,
                        macos / "agentchirp-hook"]:
             run(*signature, target)

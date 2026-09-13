@@ -7,7 +7,8 @@ if CommandLine.arguments.contains("--codex-status") {
         fputs("Codex shared server unavailable\n", stderr)
         exit(1)
     }
-    let statuses = threads.map { ["id": $0.id, "state": $0.state.rawValue, "detail": $0.detail] }
+    let sessions = CodexRuntimeOverlay().merge([], runtime: threads, clients: AgentProcessSnapshot.read()?.codexClients())
+    let statuses = sessions.map { ["id": $0.id, "state": $0.state.rawValue, "detail": $0.detail, "terminal": $0.terminal, "tty": $0.tty] }
     let data = try! JSONSerialization.data(withJSONObject: statuses, options: [.prettyPrinted, .sortedKeys])
     print(String(decoding: data, as: UTF8.self))
     exit(0)

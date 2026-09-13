@@ -133,7 +133,7 @@ The download becomes available after the first signed app release. No source or 
 to be hosted on a separate download server.
 
 Before the first public release, also test a browser-downloaded DMG on a Mac that
-has not run the development build: drag/open, first-run setup with both/no/one tool, automatic launcher installation, Open Codex, Codex hook review,
+has not run the development build: drag/open, first-run setup with both/no/one tool, automatic launcher installation, Codex hook review,
 launch at login and disabling it, terminal focus/Automation consent, and an
 actual Sparkle update from one signed version to the next. Local diagnostic
 checks do not claim these system-level flows have been exercised.

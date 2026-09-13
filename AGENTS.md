@@ -16,6 +16,7 @@ Sources/
     IntegrationInstaller.swift Shared atomic executable/hook installation with observable errors
     HookAdapter.swift Native Claude/Codex hook transport, locking and ancestry
     CodexTokens.swift Incremental Codex cumulative token adapter
+    AgentProcessSnapshot.swift Bounded process discovery, ancestry, Codex terminal clients
     Version.swift   appVersion constant + isDevBuild detection (path-based)
   agentchirp-hook/    Native hook executable (no AppKit, no Python runtime)
   agentchirp/         AppKit menu bar app
@@ -72,8 +73,8 @@ The native CI checks exercise deferred layout, animated large/small/empty reopen
 focused-row removal, scroll restoration, and constrained content bounds.
 
 Rows are fixed at 64 points, with path and token usage in tooltips. The whole row
-opens the terminal (or copies the path for unsupported terminals and shows "Copied"
-in the clock for 1.5 seconds). Arrow keys navigate rows and Return activates them.
+opens the terminal when available; unsupported or undetected terminals have no row
+action or action icon. Arrow keys navigate rows and Return activates them.
 There are no expandable rows. Same-name projects show `parent/name`. The header's
 top right holds three captioned icon buttons (`HeaderIconButton`, image above a
 9-point caption): Awake/May sleep, Sounds/Muted, Quit (the version is the quit
@@ -166,12 +167,18 @@ Python hook tests use temporary directories only. UI snapshots include mixed pro
 Do not claim live Codex hook delivery until the user has trusted the installed hooks.
 
 `codex-chirp` delegates to the installed adapter's `launch-codex` mode, starts
-Codex's local App Server daemon and uses `--remote unix://...`. Ordinary `codex`
-is unchanged. `CodexRuntimeClient` polls loaded root threads with read-only
+Codex's local App Server daemon and uses `--remote unix://...`. Plain `codex` needs no wrapper: daemon-backed sessions use the same runtime monitoring,
+while older standalone sessions retain hook tracking. `CodexRuntimeClient` polls loaded root threads with read-only
 `thread/read` calls on the SessionStore queue. It never subscribes to threads or
 responds to server requests. `CodexRuntimeOverlay` overrides matching hook state,
 preserves metadata and clocks, and falls back to hooks on disconnection. Live
 status permits delayed permission sounds; validation rechecks it before playback.
+`AgentProcessSnapshot` reads local client processes on the store queue. Trim padded
+`ps` command fields before matching bare executable names. Server-backed sessions
+match terminal clients only when both client and thread are unique in their project;
+bindings retain PID and start time. Cached idle threads disappear after that client
+exits or no client remains in the project. Ambiguous matches have no terminal action,
+failed process inspection preserves rows, and detached active work stays visible.
 `--codex-status` is a read-only diagnostic that skips application setup.
 
 ## Native app installation and releases
@@ -190,11 +197,10 @@ Bump appVersion and add a dated changelog section before tagging a new release.
 Never publish a development bundle or an unstapled archive as an official release.
 
 The first-run window owns integration results/retry, explicit login opt-in via
-`SMAppService.mainApp`, update preferences and Open Codex. Codex setup automatically
+`SMAppService.mainApp`, update preferences and a Done button. Codex setup automatically
 installs the bundled launcher in ~/Library/Application Support/AgentChirp/bin.
-Open Codex chooses a project and passes a safely quoted command as an osascript
-argument to Terminal; it does not edit shell profiles or PATH. Only an explicit
-launch starts Codex's own server. Provider home changes are checked every 10 seconds;
+Users start Codex from their terminal; setup does not edit shell profiles or PATH.
+Only an explicit launch starts Codex's own server. Provider home changes are checked every 10 seconds;
 missing tools show get-tool links and never create provider homes or block setup.
 The console's bird opens Settings; Command-comma and Finder reopen do too. The
 console retains its three captioned controls and live popover sizing contract.

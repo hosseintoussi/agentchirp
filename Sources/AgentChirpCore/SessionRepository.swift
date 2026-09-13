@@ -156,7 +156,9 @@ public final class SessionRepository {
                 provider:       provider,
                 lastEvent:      json["last_event"] as? String ?? "",
                 detail:         state == "waiting" ? (json["detail"] as? String ?? "") : "",
-                transcriptModifiedAt: (try? fm.attributesOfItem(atPath: transcriptPath)[.modificationDate] as? Date)?.timeIntervalSince1970
+                transcriptModifiedAt: (try? fm.attributesOfItem(atPath: transcriptPath)[.modificationDate] as? Date)?.timeIntervalSince1970,
+                codexServerBacked: provider == .codex && (json["codex_server_backed"] as? Bool
+                    ?? (storedPid > 0 && (json["tty"] as? String ?? "").isEmpty))
             )
         }
 
@@ -220,7 +222,7 @@ public final class SessionStore {
             let directory = request.provider == .claude ? self.claudeDirectory : self.codexDirectory
             let hooks = self.repository.loadSessions(dir: directory, provider: request.provider, includeTokens: false)
             let sessions = request.provider == .codex
-                ? self.runtimeOverlay.merge(hooks, runtime: self.runtime?.read()) : hooks
+                ? self.runtimeOverlay.merge(hooks, runtime: self.runtime?.read(), clients: AgentProcessSnapshot.read()?.codexClients()) : hooks
             let current = sessions.first { $0.id == request.id }
             DispatchQueue.main.async { receive(current) }
         }
@@ -231,7 +233,7 @@ public final class SessionStore {
         pending.removeAll()
         queue.async {
             let hooks = self.repository.loadAllSessions(claudeDir: self.claudeDirectory, codexDir: self.codexDirectory)
-            let sessions = self.runtimeOverlay.merge(hooks, runtime: self.runtime?.read())
+            let sessions = self.runtimeOverlay.merge(hooks, runtime: self.runtime?.read(), clients: AgentProcessSnapshot.read()?.codexClients())
             DispatchQueue.main.async {
                 callbacks.forEach { $0(sessions) }
                 self.loading = false

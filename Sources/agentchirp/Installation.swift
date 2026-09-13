@@ -64,7 +64,6 @@ struct SetupActions {
     var automaticUpdates: () -> Bool
     var setAutomaticUpdates: (Bool) -> Void
     var checkUpdates: () -> Void
-    var openCodex: (NSWindow) -> Void
     var getTool: (AgentProvider) -> Void
     var finish: () -> Void
 }
@@ -77,7 +76,6 @@ final class SetupWindowController: NSWindowController {
     let retry = NSButton(title: "Check again", target: nil, action: nil)
     let check = NSButton(title: "Check for Updates…", target: nil, action: nil)
     let done = NSButton(title: "Done", target: nil, action: nil)
-    let command = NSButton(title: "Open Codex…", target: nil, action: nil)
     private(set) var getToolButtons: [NSButton] = []
     private let loginDetail = NSTextField(wrappingLabelWithString: "")
     private let heading = NSTextField(labelWithString: "AgentChirp")
@@ -134,9 +132,7 @@ final class SetupWindowController: NSWindowController {
         stack.addArrangedSubview(updateDetail)
         check.target = self; check.action = #selector(checkUpdates)
         check.isEnabled = actions.updatesAvailable
-        command.target = self; command.action = #selector(openCodex)
-        command.toolTip = "Choose a project and start Codex in Terminal. Everything AgentChirp needs is already included."
-        stack.addArrangedSubview(NSStackView(views: [check, command]))
+        stack.addArrangedSubview(check)
         let spacer = NSView()
         stack.addArrangedSubview(spacer)
         spacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
@@ -158,7 +154,6 @@ final class SetupWindowController: NSWindowController {
     func present(results: [IntegrationSetupResult], firstRun: Bool) {
         heading.stringValue = firstRun ? "Welcome to AgentChirp" : "AgentChirp"
         introduction.stringValue = "Your agents live in the menu bar. AgentChirp lights up when they need you. Click the bird in the console to return to Settings."
-        done.title = firstRun ? "Start using AgentChirp" : "Done"
         render(results)
         refreshPreferences()
         showWindow(nil)
@@ -170,7 +165,6 @@ final class SetupWindowController: NSWindowController {
     private func render(_ results: [IntegrationSetupResult]) {
         let missingCount = results.filter { !$0.installed && !$0.needsAttention }.count
         window?.setContentSize(NSSize(width: 480, height: 510 + CGFloat(missingCount) * 38))
-        command.isEnabled = results.contains { $0.provider == .codex && $0.installed }
         getToolButtons.removeAll()
         let noneReady = !results.contains { $0.installed || $0.needsAttention }
         introduction.stringValue = noneReady
@@ -212,7 +206,6 @@ final class SetupWindowController: NSWindowController {
     }
     @objc private func toggleUpdates() { actions.setAutomaticUpdates(automatic.state == .on); refreshPreferences() }
     @objc private func checkUpdates() { actions.checkUpdates() }
-    @objc private func openCodex() { if let window { actions.openCodex(window) } }
     @objc private func getTool(_ sender: NSButton) { actions.getTool(sender.tag == 0 ? .claude : .codex) }
     @objc private func finish() { actions.finish(); close() }
 }

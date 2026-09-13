@@ -33,8 +33,8 @@ permission", "Waiting for your answer"). Projects with the same folder name
 show their parent folder.
 
 Click anywhere on a row to open its terminal; hover for the full path and token usage.
-Terminal jumps support iTerm2 and Terminal.app; other terminals copy the project path
-and the row says "Copied". Arrow keys move between rows, Return opens the selected
+Terminal jumps support iTerm2 and Terminal.app; rows without a supported terminal
+have no action. Arrow keys move between rows, Return opens the selected
 session, Escape dismisses the popover. Live updates reorder the list in place without
 resizing the open popover.
 
@@ -117,16 +117,12 @@ an event's agentchirp hook, your version wins.
 Codex sessions appear alongside Claude sessions, with a provider label, model, usage,
 and the same compact menu bar states. Tested against Codex CLI 0.154.0.
 
-For automatic clearing of amber as soon as an answer or approval is accepted,
-start new sessions with **Open Codex…** or the included `codex-chirp` launcher:
+Start Codex normally with `codex` in your terminal. No AgentChirp-specific launcher
+is required. AgentChirp detects local terminal clients and reads live status from
+Codex’s shared server when available. Older standalone sessions continue using hooks.
 
-AgentChirp includes and automatically installs its Codex launcher as part of setup.
-Click **Open Codex…** in Settings, choose your project, and Codex opens in Terminal.
-There is no separate server download, launcher installation, or PATH configuration.
-The button is disabled until Codex has been detected and set up.
-
-If you prefer starting sessions from an existing terminal, the included launcher
-also works directly:
+AgentChirp also installs the optional `codex-chirp` launcher during setup.
+You can run it directly from your terminal:
 
 ```sh
 "$HOME/Library/Application Support/AgentChirp/bin/codex-chirp"
@@ -138,8 +134,8 @@ The launcher starts Codex's local shared
 App Server automatically and connects the terminal to it. AgentChirp reads live
 thread status about once per second, clears amber when work resumes, and checks
 that a request remains unanswered before playing its delayed sound. It never
-answers approvals or questions. Ordinary `codex` and already-running standalone
-sessions continue using hooks. This optional integration uses the experimental
+answers approvals or questions. Plain `codex` sessions that use the local daemon
+receive the same monitoring automatically. This integration uses the experimental
 App Server interface in Codex CLI 0.154.0.
 
 When a Codex home exists, AgentChirp installs its adapter at
@@ -158,10 +154,13 @@ waiting. Completion plays the normal cue; interruption does not announce success
 For standalone sessions, approval state clears when the matching tool finishes or the turn stops; permission prompts are visual-only because hooks cannot confirm when approval was granted. Other
 parallel tool completions do not clear outstanding approvals.
 
-Terminal jumps are available when a local iTerm2 or Terminal.app ancestor and TTY
-can be identified. A session without that information remains visible; clicking its row copies the path. This integration does not attach to remote Codex servers or import
-historical sessions. Codex may keep a detached session open for up to 30 minutes
-before emitting SessionEnd.
+Terminal jumps use the local Codex client’s iTerm2 or Terminal.app ancestor and TTY.
+For shared-server sessions, AgentChirp matches a unique client and thread by project
+directory, then tracks that client’s PID and start time. Ambiguous same-project
+sessions have no terminal action. Cached idle threads are hidden when their
+matched client exits or no client remains in the project; detached work stays visible.
+Process-inspection failures preserve rows. This integration does not attach to
+remote Codex servers or import historical sessions.
 
 Usage is a best-effort adapter for local Codex JSONL transcripts. It reads only
 appended complete records and uses cumulative totals, splitting cached input out

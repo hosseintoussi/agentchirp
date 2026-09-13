@@ -115,7 +115,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 automaticUpdates: { [weak self] in self?.updates.automatic ?? false },
                 setAutomaticUpdates: { [weak self] in self?.updates.automatic = $0 },
                 checkUpdates: { [weak self] in self?.updates.check() },
-                openCodex: { [weak self] window in self?.openCodex(from: window) },
                 getTool: { provider in
                     let url = provider == .claude ? "https://code.claude.com/docs/en/quickstart" : "https://developers.openai.com/codex/cli/"
                     NSWorkspace.shared.open(URL(string: url)!)
@@ -140,44 +139,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         dashboard.watchedProviders = integrationResults.filter { $0.installed }.map { $0.provider }
         watchSessionsDir()
         setupWindow?.refreshIntegrations(integrationResults)
-    }
-
-    private func openCodex(from window: NSWindow) {
-        let panel = NSOpenPanel()
-        panel.message = "Choose the project you want to work on in Codex."
-        panel.prompt = "Open Codex"
-        panel.canChooseFiles = false; panel.canChooseDirectories = true
-        panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory())
-        panel.beginSheetModal(for: window) { response in
-            guard response == .OK, let project = panel.url else { return }
-            let command = codexTerminalCommand(project: project.path, launcher: codexLauncherURL().path, home: codexHome)
-            // Pass the shell command as an argument, never interpolate it into AppleScript.
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", """
-                on run argv
-                    tell application "Terminal"
-                        activate
-                        do script (item 1 of argv)
-                    end tell
-                end run
-                """, "--", command]
-            process.standardOutput = FileHandle.nullDevice
-            let errors = Pipe()
-            process.standardError = errors
-            process.terminationHandler = { completed in
-                guard completed.terminationStatus != 0 else { return }
-                let detail = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                DispatchQueue.main.async {
-                    let alert = NSAlert()
-                    alert.messageText = "Could not open Codex in Terminal"
-                    alert.informativeText = detail
-                    alert.beginSheetModal(for: window)
-                }
-            }
-            do { try process.run() }
-            catch { NSAlert(error: error).beginSheetModal(for: window) }
-        }
     }
 
     // MARK: File watching
@@ -355,7 +316,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     // Only these two can be focused by tty via AppleScript; rows for other terminals
-    // offer Copy path instead of attempting to activate an unsupported app.
+    // have no action when their terminal cannot be focused.
     static let focusableTerminals: Set<String> = ["iTerm2", "Terminal"]
 
     func canFocus(_ session: Session) -> Bool {
