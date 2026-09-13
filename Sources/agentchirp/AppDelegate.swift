@@ -11,12 +11,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var workingDimmed = false
     private var attentionOpacity: CGFloat = 1
     private var attentionPhase: Double = 0
-    private var knownWaiting: Set<String> = []
+    private var knownWaiting: [String: TimeInterval] = [:]
     private var beaconDescriptor: BeaconDescriptor?
     private var lastSessions: [Session] = []
     var watchers: [DispatchSourceFileSystemObject] = []
     private var notificationPolicy = NotificationPolicy()
-    private let sessionStore = SessionStore(runtime: CodexRuntimeClient())
+    private let sessionStore = SessionStore(runtime: CodexRuntimeClient(), runtimeOverlay: CodexRuntimeOverlay(
+        retiredThreadIDs: Set(UserDefaults.standard.stringArray(forKey: "retiredCodexThreads") ?? []),
+        onRetirementChange: { UserDefaults.standard.set($0.sorted(), forKey: "retiredCodexThreads") }))
     private var receivedInitialSnapshot = false
     private var sessions: [Session] = []
     private var waitingAlerts = WaitingAlerts()
@@ -170,7 +172,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self.sessions = sessions
             if !self.receivedInitialSnapshot {
                 self.notificationPolicy.seed(sessions)
-                self.knownWaiting = Set(sessions.filter { $0.state == .waiting }.map { $0.id })
+                self.knownWaiting = Dictionary(sessions.filter { $0.state == .waiting }.map { ($0.id, $0.ts) }, uniquingKeysWith: max)
                 self.receivedInitialSnapshot = true
             }
             self.fireNotifications(sessions)
@@ -237,6 +239,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func updateButton(_ sessions: [Session]) {
         guard let button = statusItem.button else { return }
         let waitingIDs = Set(sessions.filter { $0.state == "waiting" }.map { $0.id })
+        let waitingClocks = Dictionary(sessions.filter { $0.state == .waiting }.map { ($0.id, $0.ts) }, uniquingKeysWith: max)
         let waiting = waitingIDs.count
         let working = sessions.filter { $0.state == "working" }.count
         let idle = sessions.count - waiting - working
@@ -244,8 +247,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // A completion shows even while other sessions work: the moment is brief and earned.
         let justFinished = sessions.contains { $0.finished(within: 10) }
         // Flash only when a session newly asks for input, never on every refresh.
-        if !waitingIDs.subtracting(knownWaiting).isEmpty { startAttentionFlash() }
-        knownWaiting = waitingIDs
+        if waitingClocks.contains(where: { knownWaiting[$0.key] != $0.value }) { startAttentionFlash() }
+        knownWaiting = waitingClocks
         if waiting == 0 { stopAttentionFlash() }
         button.title = ""
         updateWorkingBreath(working: working > 0 && waiting == 0 && !justFinished)

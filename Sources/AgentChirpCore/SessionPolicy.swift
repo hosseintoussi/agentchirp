@@ -38,8 +38,17 @@ public struct BeaconDescriptor: Equatable {
 public struct NotificationPolicy {
     private var previous: [String: SessionState] = [:]
     private var previousWaits: [String: TimeInterval] = [:]
+    private var completedThrough: [String: TimeInterval] = [:]
+    private var awaitingCompletion: Set<String> = []
     public init() {}
     public mutating func seed(_ sessions: [Session]) {
+        completedThrough = Dictionary(sessions.compactMap { session in
+            session.completionAt.map { (session.id, $0) }
+        }, uniquingKeysWith: max)
+        awaitingCompletion = Set(sessions.filter { $0.state == .working || $0.state == .waiting }.map(\.id))
+        rememberStates(sessions)
+    }
+    private mutating func rememberStates(_ sessions: [Session]) {
         previousWaits = Dictionary(sessions.filter { $0.state == .waiting }.map { ($0.id, $0.ts) }, uniquingKeysWith: { _, new in new })
         previous = Dictionary(sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { _, new in new })
     }
@@ -52,16 +61,29 @@ public struct NotificationPolicy {
         var changes = Changes()
         let ids = Set(sessions.map { $0.id })
         changes.cancelWaiting = Set(previous.keys).subtracting(ids)
+        awaitingCompletion.formIntersection(ids)
+        completedThrough = completedThrough.filter { ids.contains($0.key) }
         for session in sessions where previous[session.id] != session.state
             || (session.state == .waiting && previousWaits[session.id] != session.ts) {
-            let old = previous[session.id]
             if session.state == .waiting { changes.waiting.append(session) }
             else { changes.cancelWaiting.insert(session.id) }
-            if session.state == .idle, old == .working || old == .waiting, session.outcome == .success {
-                changes.completed.append(session)
+        }
+        for session in sessions {
+            if session.state == .working || session.state == .waiting {
+                awaitingCompletion.insert(session.id)
+            }
+            if let completionAt = session.completionAt {
+                if session.state == .idle, awaitingCompletion.contains(session.id),
+                   completionAt > (completedThrough[session.id] ?? -.infinity) {
+                    changes.completed.append(session)
+                }
+                completedThrough[session.id] = max(completedThrough[session.id] ?? -.infinity, completionAt)
+            }
+            if session.state == .idle && session.outcome != .none {
+                awaitingCompletion.remove(session.id)
             }
         }
-        seed(sessions)
+        rememberStates(sessions)
         return changes
     }
 }

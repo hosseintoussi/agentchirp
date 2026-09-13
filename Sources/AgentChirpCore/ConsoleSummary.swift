@@ -15,7 +15,7 @@ public struct ConsoleSummary {
         working = sessions.filter { $0.state == "working" }.count
         idle = sessions.count - waiting - working
         finishedName = sessions.filter { $0.finished(within: Self.completionWindow, now: now) }
-            .max { $0.ts < $1.ts }?.dirName
+            .max { ($0.completionAt ?? 0) < ($1.completionAt ?? 0) }?.dirName
         func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
         let watchingLine: String
         switch (watching.contains(.claude), watching.contains(.codex)) {

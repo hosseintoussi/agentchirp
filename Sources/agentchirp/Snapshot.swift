@@ -249,20 +249,23 @@ func checkDashboardInteractions() {
     delegate.updateButton([])
     precondition(delegate.workingTimer == nil && button.alphaValue == 1, "Idle is steady")
     precondition(button.image!.isTemplate && button.image!.tiffRepresentation == workingArt, "Idle keeps the same neutral mark")
-    delegate.updateButton([session("attention", "waiting"), session("busy", "working")])
+    let firstAsk = session("attention", "waiting")
+    delegate.updateButton([firstAsk, session("busy", "working")])
     precondition(!button.image!.isTemplate && delegate.workingTimer == nil && button.alphaValue == 1,
                  "Input needed colors the beacon and supersedes breathing")
     if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
         let pulse = delegate.attentionTimer
         precondition(pulse != nil, "A new request starts the flash")
         let steady = button.image!.tiffRepresentation
-        delegate.updateButton([session("attention", "waiting")])
+        delegate.updateButton([firstAsk])
         precondition(delegate.attentionTimer === pulse, "Refresh must not restart the flash")
         for _ in 0..<12 { pulse!.fire() }
         precondition(steady != button.image!.tiffRepresentation, "Flash must change visible artwork")
         for _ in 0..<80 { pulse!.fire() }
         precondition(delegate.attentionTimer == nil, "The flash ends on its own")
         precondition(!button.image!.isTemplate && button.image!.tiffRepresentation == steady, "After the flash the beacon holds steady orange")
+        delegate.updateButton([session("attention", "waiting", age: 1)])
+        precondition(delegate.attentionTimer != nil, "A different request in the same session starts a new finite flash")
     } else {
         precondition(delegate.attentionTimer == nil, "Reduce Motion must keep the beacon steady")
     }

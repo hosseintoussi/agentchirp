@@ -28,10 +28,20 @@ public enum HookAdapter {
         defer { close(fd) }
         guard flock(fd, LOCK_EX) == 0 else { throw POSIXError(.EIO) }
         defer { flock(fd, LOCK_UN) }
-        let previous = (try? Data(contentsOf: path)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        var previous = (try? Data(contentsOf: path)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         if event == "SessionEnd" {
             if fm.fileExists(atPath: path.path) { try fm.removeItem(at: path) }
             return "ended"
+        }
+        let ancestry = processInfo(provider: provider)
+        let pidKey = provider == .codex ? "agent_pid" : "claude_pid"
+        let previousPID = previous[pidKey] as? Int ?? 0
+        let previousUpdate = previous["updated_at"] as? Double ?? previous["ts"] as? Double ?? 0
+        if ancestry.pid > 0, previousPID > 0,
+           ancestry.pid != previousPID || SessionEnvironment().processIsDead(previousPID, previousUpdate) {
+            // A resumed session may reuse its ID, but not the old owner's turn,
+            // pending requests or state clock. Keep only useful project metadata.
+            previous = previous.filter { ["cwd", "transcript_path", "model"].contains($0.key) }
         }
         func string(_ key: String, in object: [String: Any]) -> String { object[key] as? String ?? "" }
         func inherited(_ key: String) -> String {
@@ -54,6 +64,10 @@ public enum HookAdapter {
             if event == "SessionStart" && ["working", "waiting"].contains(previousState) { return "" }
             state = states[event]!
             var pending = sameTurn ? previous["pending_tools"] as? [String] ?? [] : []
+            var kinds = sameTurn ? previous["pending_kinds"] as? [String: String] ?? [:] : [:]
+            // Old records did not store per-request kinds. Unknown requests stay
+            // visual-only until observed again rather than inventing an input ask.
+            kinds = Dictionary(pending.map { ($0, kinds[$0] ?? "permission") }, uniquingKeysWith: { _, new in new })
             let tool = string("tool_name", in: hook)
             var input: Any = hook["tool_input"] ?? NSNull()
             if let object = input as? [String: Any], let command = object["command"] { input = ["command": command] }
@@ -61,19 +75,22 @@ public enum HookAdapter {
             let fingerprint = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
             let call = string("tool_use_id", in: hook)
             var key = call.isEmpty ? fingerprint : "call:" + call
-            detail = sameTurn ? string("detail", in: previous) : ""
             if event == "PermissionRequest" { key = fingerprint }
             let shortTool = tool.components(separatedBy: "__").last!.components(separatedBy: ".").last!
             if event == "PermissionRequest" || (event == "PreToolUse" && shortTool == "request_user_input") {
                 if !pending.contains(key) { pending.append(key) }
-                detail = event == "PreToolUse" ? "input" : "permission"
+                kinds[key] = event == "PreToolUse" ? "input" : "permission"
             } else if event == "PostToolUse" {
                 pending.removeAll { $0 == key || $0 == fingerprint }
             } else if ["Stop", "Interrupt", "UserPromptSubmit", "SessionStart"].contains(event) {
                 pending = []
             }
-            if !pending.isEmpty { state = "waiting" } else { detail = "" }
-            extra = ["turn_id": turn, "pending_tools": pending, "model": inherited("model")]
+            kinds = kinds.filter { pending.contains($0.key) }
+            if !pending.isEmpty {
+                state = "waiting"
+                detail = kinds.values.contains("input") ? "input" : "permission"
+            }
+            extra = ["turn_id": turn, "pending_tools": pending, "pending_kinds": kinds, "model": inherited("model")]
         } else {
             if state == "resume" {
                 if !previousState.isEmpty && previousState != "waiting" { return "" }
@@ -85,12 +102,11 @@ public enum HookAdapter {
         }
         let now = Date().timeIntervalSince1970
         let ts = previousState == state && sameTurn ? previous["ts"] as? Double ?? now : now
-        let ancestry = processInfo(provider: provider)
         var record: [String: Any] = ["provider": provider.rawValue, "session_id": sid, "state": state,
-            "ts": ts, "last_event": event, "detail": detail, "cwd": inherited("cwd"),
+            "ts": ts, "updated_at": now, "last_event": event, "detail": detail, "cwd": inherited("cwd"),
             "transcript_path": inherited("transcript_path"), "terminal": ancestry.terminal, "tty": ancestry.tty,
             "codex_server_backed": provider == .codex && ancestry.pid > 0 && ancestry.tty.isEmpty,
-            provider == .codex ? "agent_pid" : "claude_pid": ancestry.pid]
+            pidKey: ancestry.pid]
         record.merge(extra) { _, new in new }
         let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .prettyPrinted])
         // Use the same fixed temporary path under the shared lock, then atomic rename.

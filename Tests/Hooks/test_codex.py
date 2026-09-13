@@ -106,6 +106,70 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(second["model"], "gpt-test")
         self.assertEqual(second["provider"], "codex")
 
+    def test_event_freshness_is_separate_from_state_clock(self):
+        first = self.fire("UserPromptSubmit")
+        first.update(ts=first["ts"] - 300, updated_at=first["updated_at"] - 300)
+        self.path.write_text(json.dumps(first))
+        second = self.fire("PreToolUse")
+        self.assertEqual(second["ts"], first["ts"])
+        self.assertGreater(second["updated_at"], first["updated_at"] + 290)
+
+    def test_resumed_owner_drops_abandoned_turn_state(self):
+        # A real parent named codex lets the native helper discover ownership.
+        owner = pathlib.Path(self.temp.name) / "codex"
+        source = """
+        #include <unistd.h>
+        #include <sys/wait.h>
+        int main(int argc, char **argv) {
+            pid_t child = fork();
+            if (child < 0) return 2;
+            if (child == 0) {
+                execl(argv[1], argv[1], "codex", argv[2], (char *)0);
+                _exit(127);
+            }
+            int status;
+            if (waitpid(child, &status, 0) < 0) return 3;
+            return WIFEXITED(status) ? WEXITSTATUS(status) : 4;
+        }
+        """
+        subprocess.run(["cc", "-x", "c", "-o", str(owner), "-"], input=source,
+                       text=True, capture_output=True, check=True)
+        helper = SCRIPT.parent / ".build/release/agentchirp-hook"
+        self.directory.mkdir(parents=True)
+        for state in ("idle", "working", "waiting"):
+            self.path.write_text(json.dumps(dict(session_id="session", state=state, ts=100,
+                agent_pid=99999999, turn_id="abandoned", last_event="Interrupt",
+                pending_tools=["old-request"], detail="input", cwd="/tmp/project")))
+            result = subprocess.run([str(owner), str(helper), str(self.directory)],
+                input=json.dumps(dict(session_id="session", hook_event_name="SessionStart")),
+                text=True, capture_output=True, check=True)
+            self.assertEqual(json.loads(result.stdout), {})
+            resumed = json.loads(self.path.read_text())
+            self.assertEqual(resumed["state"], "idle")
+            self.assertGreater(resumed["agent_pid"], 0)
+            self.assertNotEqual(resumed["agent_pid"], 99999999)
+            self.assertGreater(resumed["ts"], 100)
+            self.assertGreaterEqual(resumed["updated_at"], resumed["ts"])
+            self.assertEqual(resumed["turn_id"], "")
+            self.assertEqual(resumed["pending_tools"], [])
+            self.assertEqual(resumed["cwd"], "/tmp/project")
+
+    def test_mixed_request_kinds_and_legacy_pending_requests(self):
+        self.fire("UserPromptSubmit")
+        self.fire("PreToolUse", tool_name="request_user_input", tool_use_id="question")
+        mixed = self.fire("PermissionRequest", tool_name="Bash")
+        self.assertEqual(mixed["detail"], "input")
+        remaining = self.fire("PostToolUse", tool_name="request_user_input", tool_use_id="question")
+        self.assertEqual(remaining["detail"], "permission")
+        self.assertEqual(list(remaining["pending_kinds"].values()), ["permission"])
+        # Upgrading an old record cannot turn untyped requests into audible input asks.
+        remaining.pop("pending_kinds")
+        remaining["detail"] = "input"
+        self.path.write_text(json.dumps(remaining))
+        legacy = self.fire("PreToolUse", tool_name="Read")
+        self.assertEqual(legacy["detail"], "permission")
+        self.assertEqual(self.fire("PostToolUse", tool_name="Bash")["pending_kinds"], {})
+
     def test_child_does_not_finish_parent(self):
         self.fire("UserPromptSubmit")
         transcript = pathlib.Path(self.temp.name) / "child.jsonl"

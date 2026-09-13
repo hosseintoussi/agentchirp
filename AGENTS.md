@@ -142,6 +142,8 @@ currently says waiting; the writer rechecks under the lock before resuming. A re
 state keeps its `ts`, so clocks measure time in the current state. Hooks persist
 `last_event`; only Stop is successful completion. Startup, StopFailure, and Interrupt
 never produce a completion sound or green tint.
+Hooks also persist `updated_at` for process liveness; never use the display clock
+as the latest hook time. A changed owner discards the previous turn and pending requests.
 
 The app owns integration setup and reports failures in its setup window. Starting a
 development executable still updates the user's installed hooks; snapshot, UI,
@@ -179,6 +181,13 @@ match terminal clients only when both client and thread are unique in their proj
 bindings retain PID and start time. Cached idle threads disappear after that client
 exits or no client remains in the project. Ambiguous matches have no terminal action,
 failed process inspection preserves rows, and detached active work stays visible.
+Known retired thread IDs persist in `retiredCodexThreads` UserDefaults and are excluded
+before terminal matching. Explicit activity clears retirement; a complete runtime
+listing prunes unloaded IDs. A failed read must not discard this history.
+Completion identity uses the hook's completion time, independently of the runtime
+state clock. Newly observed activity invalidates earlier success; a later Stop can
+notify even when the runtime already reported idle. New hook waiting timestamps
+restart the request clock and alert ticket even if consecutive polls both see waiting.
 `--codex-status` is a read-only diagnostic that skips application setup.
 
 ## Native app installation and releases
@@ -219,6 +228,8 @@ uses injected actions and exercises real controls without touching user setup.
   Codex question answers correlate by `tool_use_id`; permission requests have no
   approval-resolved event, so standalone permission signals are visual-only and keep-awake stays held
   through the pending interval until the turn becomes idle or ends.
+  Each pending Codex request retains its generic kind so resolving one request
+  recomputes the remaining input/permission state. Untyped legacy requests stay visual-only.
 
 - **Atomic state files:** the hook writes to `<session>.json.tmp` and `os.replace()`s it —
   the app reads without the lock, so the rename guarantees it never sees a half-written
@@ -229,7 +240,9 @@ uses injected actions and exercises real controls without touching user setup.
   through "done", which would chime "finished" for a session the user killed.
 
 - **PID recycling:** a session is alive only if `kill(pid, 0)` succeeds *and* the process
-  start time (via `sysctl KERN_PROC_PID`) predates the session's last hook event. Claude
+  start time (via `sysctl KERN_PROC_PID`) predates `updated_at` (legacy files fall back
+  to `ts`). Waiting sessions with live owners do not expire; the four-hour timeout is
+  only a fallback for missing owner PIDs. Claude
   always starts before its first hook fires, so a later start time means the PID was reused.
 
 - **Incremental transcript parsing:** `readTokens` caches a byte offset per transcript and

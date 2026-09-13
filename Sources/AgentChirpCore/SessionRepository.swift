@@ -76,6 +76,8 @@ public final class SessionRepository {
             // that doesn't fire UserPromptSubmit). Use a 5-second buffer so the initial
             // transcript write that triggered the Notification doesn't false-positive.
             guard ts.isFinite, ts >= 0 else { return nil }
+            let updatedAt = json["updated_at"] as? TimeInterval ?? ts
+            guard updatedAt.isFinite, updatedAt >= 0 else { return nil }
             var state: SessionState
             if provider == .claude, rawState == "waiting", !transcriptPath.isEmpty,
                let attrs = try? fm.attributesOfItem(atPath: transcriptPath),
@@ -91,7 +93,7 @@ public final class SessionRepository {
             // A live PID can still belong to a *different* process after PID reuse: the real Claude
             // process always starts before its first hook write, so a start time after this
             // session's last event (with slack) means the PID was recycled.
-            let pidDead = storedPid > 0 && environment.processIsDead(storedPid, ts)
+            let pidDead = storedPid > 0 && environment.processIsDead(storedPid, updatedAt)
 
             // "done" means Claude finished its last response — the process may still be open.
             // Resolve to "idle" when the PID is alive so open sessions stay visible.
@@ -129,7 +131,7 @@ public final class SessionRepository {
                     }
                 }
             } else if state == "waiting" {
-                stale = pidDead || (now - ts) > 14400
+                stale = storedPid > 0 ? pidDead : (now - ts) > 14400
             } else {
                 stale = (now - ts) > 14400
             }
@@ -201,13 +203,14 @@ public final class SessionStore {
     private let claudeDirectory: String
     private let codexDirectory: String
     private let runtime: CodexRuntimeClient?
-    private let runtimeOverlay = CodexRuntimeOverlay()
+    private let runtimeOverlay: CodexRuntimeOverlay
     private var loading = false
     private var pending: [([Session]) -> Void] = []
     public init(repository: SessionRepository = SessionRepository(),
                 claudeDir: String = sessionsDir, codexDir: String = codexSessionsDir,
-                runtime: CodexRuntimeClient? = nil) {
+                runtime: CodexRuntimeClient? = nil, runtimeOverlay: CodexRuntimeOverlay = CodexRuntimeOverlay()) {
         self.runtime = runtime
+        self.runtimeOverlay = runtimeOverlay
         self.repository = repository; claudeDirectory = claudeDir; codexDirectory = codexDir
     }
     public func refresh(_ receive: @escaping ([Session]) -> Void) {

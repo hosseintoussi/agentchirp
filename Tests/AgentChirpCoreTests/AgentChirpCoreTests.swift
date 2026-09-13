@@ -638,6 +638,157 @@ suite("Codex terminal ownership") {
            "standalone hook sessions retain their independent process lifecycle")
 }
 
+suite("Completion events across runtime polling") {
+    func hook(_ state: String, ts: Double, event: String = "") -> Session {
+        Session(id: "codex:completion", state: state, ts: ts, cwd: "/tmp/completion", transcriptPath: "",
+            totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: .codex, lastEvent: event)
+    }
+    func thread(_ state: String) -> CodexRuntimeThread {
+        CodexRuntimeThread(["id": "completion", "cwd": "/tmp/completion", "status": ["type": state, "activeFlags": []]])!
+    }
+    let oldStop = hook("idle", ts: 100, event: "Stop")
+    let overlay = CodexRuntimeOverlay()
+    _ = overlay.merge([oldStop], runtime: [thread("idle")], now: 100)
+    var policy = NotificationPolicy()
+    policy.seed(overlay.merge([oldStop], runtime: [thread("active")], now: 102))
+    let laterIdle = overlay.merge([oldStop], runtime: [thread("idle")], now: 104)
+    expect(laterIdle[0].finished(within: 10, now: 105), false, "old Stop cannot celebrate a later turn even within ten seconds")
+    expect(policy.update(laterIdle).completed.count, 0, "old Stop cannot sound for a later turn")
+    let disconnected = overlay.merge([oldStop], runtime: nil, now: 105)
+    expect(disconnected[0].finished(within: 10, now: 105), false, "disconnect cannot revive the invalidated Stop")
+    expect(policy.update(disconnected).completed.count, 0, "hook fallback cannot replay the old completion")
+    let delayedOld = CodexRuntimeOverlay()
+    _ = delayedOld.merge([], runtime: [thread("idle")], now: 100)
+    let delayedStop = hook("idle", ts: 101, event: "Stop")
+    _ = delayedOld.merge([delayedStop], runtime: [thread("active")], now: 102)
+    expect(delayedOld.merge([delayedStop], runtime: [thread("idle")], now: 104)[0].finished(within: 10, now: 105), false,
+           "Stop already present when new activity is first observed cannot finish that activity")
+
+    let fresh = CodexRuntimeOverlay()
+    let working = hook("working", ts: 200, event: "UserPromptSubmit")
+    var latePolicy = NotificationPolicy()
+    latePolicy.seed(fresh.merge([working], runtime: [thread("active")], now: 201))
+    expect(latePolicy.update(fresh.merge([working], runtime: [thread("idle")], now: 210)).completed.count, 0,
+           "runtime idle alone is silent")
+    let confirmed = fresh.merge([hook("idle", ts: 209, event: "Stop")], runtime: [thread("idle")], now: 211)
+    expect(latePolicy.update(confirmed).completed.count, 1, "Stop arriving after the idle snapshot sounds once")
+    expect(latePolicy.update(confirmed).completed.count, 0, "late Stop is deduplicated")
+    expect(confirmed[0].finished(within: 10, now: 219), false, "completion expires from hook time rather than runtime observation")
+    var startup = NotificationPolicy(); startup.seed(confirmed)
+    expect(startup.update(confirmed).completed.count, 0, "startup never announces historical completion")
+    _ = latePolicy.update(fresh.merge([working], runtime: [thread("active")], now: 220))
+    let interrupted = fresh.merge([hook("idle", ts: 222, event: "Interrupt")], runtime: [thread("idle")], now: 223)
+    expect(latePolicy.update(interrupted).completed.count, 0, "interrupted next turn stays silent")
+    expect(interrupted[0].finished(within: 10, now: 223), false, "interrupted next turn has no green cue")
+}
+
+suite("Repeated questions between runtime polls") {
+    func hook(_ ts: Double) -> Session {
+        Session(id: "codex:question", state: "waiting", ts: ts, cwd: "/tmp", transcriptPath: "",
+            totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, model: "", provider: .codex, detail: "input")
+    }
+    let thread = CodexRuntimeThread(["id": "question", "status": ["type": "active", "activeFlags": ["waitingOnUserInput"]]])!
+    let overlay = CodexRuntimeOverlay()
+    let first = overlay.merge([hook(100)], runtime: [thread], now: 100)
+    var policy = NotificationPolicy(); policy.seed(first)
+    var alerts = WaitingAlerts(); let firstTicket = alerts.schedule(first[0])
+    let second = overlay.merge([hook(120)], runtime: [thread], now: 121)
+    expect(second[0].ts, 120.0, "new question preserves its new hook timestamp")
+    expect(policy.update(second).waiting.count, 1, "new question gets a new notification")
+    alerts.reconcile(second)
+    expect(alerts.consume(firstTicket, current: second[0]), false, "new question invalidates the earlier debounce ticket")
+    expect(policy.update(overlay.merge([hook(120)], runtime: [thread], now: 122)).waiting.count, 0,
+           "same question does not repeatedly schedule notifications")
+    expect(overlay.merge([hook(100)], runtime: [thread], now: 123)[0].ts, 120.0,
+           "an older hook cannot move the request clock backwards")
+}
+
+suite("Retired Codex thread lifecycle") {
+    func thread(_ id: String, _ state: String = "idle") -> CodexRuntimeThread {
+        CodexRuntimeThread(["id": id, "cwd": "/tmp/retirement", "status": ["type": state, "activeFlags": []]])!
+    }
+    let first = CodexTerminalClient(pid: 10, startedAt: 10, cwd: "/tmp/retirement", tty: "/dev/ttys001", terminal: "Terminal")
+    let second = CodexTerminalClient(pid: 20, startedAt: 20, cwd: "/tmp/retirement", tty: "/dev/ttys002", terminal: "Terminal")
+    var persisted: Set<String> = []
+    let overlay = CodexRuntimeOverlay(onRetirementChange: { persisted = $0 })
+    _ = overlay.merge([], runtime: [thread("old")], clients: [first])
+    _ = overlay.merge([], runtime: [thread("old")], clients: [])
+    expect(persisted.contains("codex:old"), true, "closed thread retirement is persisted")
+    let next = overlay.merge([], runtime: [thread("old"), thread("new", "active")], clients: [second])
+    expect(next.map(\.id).joined(separator: ","), "codex:new", "closed thread is excluded before matching the new session")
+    expect(next.first?.tty ?? "", second.tty, "new session gets the only live terminal")
+    let restarted = CodexRuntimeOverlay(retiredThreadIDs: persisted, onRetirementChange: { persisted = $0 })
+    let afterRestart = restarted.merge([], runtime: [thread("old"), thread("new", "active")], clients: [second])
+    expect(afterRestart.count, 1, "restart does not resurrect the retired row")
+    expect(afterRestart.first?.tty ?? "", second.tty, "restart retains the unambiguous terminal action")
+    _ = restarted.merge([], runtime: nil, clients: [])
+    expect(persisted.contains("codex:old"), true, "disconnect does not discard retirement history")
+    let resumed = restarted.merge([], runtime: [thread("old", "active")], clients: [second])
+    expect(resumed.first?.id ?? "", "codex:old", "explicit activity can resume a previously retired thread")
+    expect(persisted.contains("codex:old"), false, "resumed thread clears its retirement")
+    _ = restarted.merge([], runtime: [thread("old")], clients: [])
+    _ = restarted.merge([], runtime: [], clients: [])
+    expect(persisted.isEmpty, true, "a complete runtime listing prunes unloaded retirements")
+    let ambiguous = CodexRuntimeOverlay().merge([], runtime: [thread("a", "active"), thread("b", "active")], clients: [second])
+    expect(ambiguous.allSatisfy { $0.tty.isEmpty }, true, "two live threads still never guess a terminal")
+    let interrupted = CodexRuntimeOverlay(onRetirementChange: { persisted = $0 })
+    _ = interrupted.merge([], runtime: [thread("old")], clients: [first])
+    _ = interrupted.merge([], runtime: nil, clients: [first])
+    _ = interrupted.merge([], runtime: nil, clients: [second])
+    expect(persisted.contains("codex:old"), true, "client exit during runtime disconnection still records retirement")
+    let recovered = interrupted.merge([], runtime: [thread("old"), thread("new", "active")], clients: [second])
+    expect(recovered.first?.tty ?? "", second.tty, "runtime disconnection does not erase binding history")
+}
+
+suite("Hook freshness and long-lived waits") {
+    let fm = FileManager.default
+    for provider in [AgentProvider.claude, .codex] {
+        let dir = makeTmpDir("long-wait-" + provider.rawValue)
+        let pidKey = provider == .codex ? "agent_pid" : "claude_pid"
+        func write(_ id: String, pid: Int, updated: Double? = nil) {
+            var object: [String: Any] = ["session_id": id, "state": "waiting", "ts": 100, pidKey: pid]
+            if let updated { object["updated_at"] = updated }
+            try! JSONSerialization.data(withJSONObject: object).write(to: URL(fileURLWithPath: dir + "/" + id + ".json"))
+        }
+        write("live", pid: 42)
+        write("dead", pid: 43)
+        write("unknown", pid: 0)
+        let repo = SessionRepository(environment: SessionEnvironment(now: { 15000 }, processIsDead: { pid, _ in pid == 43 }))
+        let sessions = repo.loadSessions(dir: dir, provider: provider)
+        expect(sessions.count, 1, "\(provider) live wait survives four hours while dead and unknown waits expire")
+        expect(fm.fileExists(atPath: dir + "/live.json"), true, "\(provider) live waiting state is not deleted")
+        if provider == .codex { expect(sessions.first?.needsKeepAwake ?? false, true, "long Codex wait continues to keep awake") }
+        write("fresh", pid: 44, updated: 14999)
+        let freshness = SessionRepository(environment: SessionEnvironment(now: { 15000 }, processIsDead: { _, ts in ts < 14000 }))
+        let result = freshness.loadSessions(dir: dir, provider: provider)
+        expect(result.count, 1, "\(provider) PID validation uses hook freshness, not the old display clock")
+        expect(result.first?.ts ?? 0, 100.0, "\(provider) fresh liveness retains the original waiting clock")
+    }
+}
+
+suite("Mixed Codex request kinds") {
+    let dir = makeTmpDir("mixed-requests")
+    func fire(_ event: String, tool: String = "", call: String = "") -> Session {
+        _ = try! HookAdapter.record(["session_id": "mixed", "hook_event_name": event, "turn_id": "turn",
+            "tool_name": tool, "tool_use_id": call, "tool_input": [:]], provider: .codex, state: "", directory: dir)
+        return SessionRepository().loadSessions(dir: dir, provider: .codex)[0]
+    }
+    _ = fire("UserPromptSubmit")
+    _ = fire("PermissionRequest", tool: "Bash")
+    _ = fire("PreToolUse", tool: "request_user_input", call: "question")
+    let permission = fire("PostToolUse", tool: "request_user_input", call: "question")
+    expect(permission.detail, "permission", "answering question leaves only permission detail")
+    var alerts = WaitingAlerts(); let ticket = alerts.schedule(permission)
+    expect(alerts.consume(ticket, current: permission), false, "remaining unverified permission cannot play an input sound")
+    _ = fire("UserPromptSubmit")
+    _ = fire("PreToolUse", tool: "request_user_input", call: "question")
+    _ = fire("PermissionRequest", tool: "Bash")
+    let question = fire("PostToolUse", tool: "Bash")
+    expect(question.detail, "input", "answering permission preserves the unanswered question detail")
+    let questionTicket = alerts.schedule(question)
+    expect(alerts.consume(questionTicket, current: question), true, "remaining unanswered question can sound")
+}
+
 suite("Installation readiness") {
     expect(ConsoleSummary([], watching: []).subline, "Open Settings to set up agents", "empty install does not claim an agent is connected")
     expect(ConsoleSummary([], watching: [.codex]).subline, "Watching Codex", "Codex-only install does not claim Claude is installed")

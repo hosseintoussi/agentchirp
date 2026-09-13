@@ -31,6 +31,11 @@
 
 
 ### Fixed
+- Completion cues retain the successful hook's identity and time: stale successes cannot finish later Codex turns, and a Stop arriving after runtime idle still sounds once
+- Successive Codex questions between polls receive separate clocks, sound timers, and attention flashes
+- Closed Codex threads no longer block new terminal bindings or reappear after restarting AgentChirp
+- Resumed sessions use fresh process ownership independently of their display clocks; live waiting sessions no longer expire after four hours
+- Mixed Codex questions and permission requests keep the correct remaining waiting kind and sound eligibility
 - Codex waiting sessions retain keep-awake through long approved commands; idle and ended sessions release it
 - Answered questions cancel pending sounds even during asynchronous validation; tool-call IDs correlate Codex answers
 - Standalone Codex permission prompts use visual signals only because hooks do not report approval resolution separately

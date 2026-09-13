@@ -43,6 +43,8 @@ public struct Session {
     public let terminal: String
     public let provider: AgentProvider
     public let lastEvent: SessionEvent
+    /// The hook's successful completion time, independent of the runtime state clock.
+    public let completionAt: TimeInterval?
     /// Generic waiting kind (permission/input). Legacy raw details are sanitized at presentation.
     public let detail: String
     public let codexServerBacked: Bool
@@ -51,7 +53,7 @@ public struct Session {
     public init(id: String, state: String, ts: TimeInterval, cwd: String, transcriptPath: String,
                 totalTokens: Int, inputTokens: Int, outputTokens: Int, cacheTokens: Int,
                 model: String, tty: String = "", terminal: String = "",
-                provider: AgentProvider = .claude, lastEvent: String = "", detail: String = "", transcriptModifiedAt: TimeInterval? = nil, runtimeStatusVerified: Bool = false, codexServerBacked: Bool = false) {
+                provider: AgentProvider = .claude, lastEvent: String = "", detail: String = "", transcriptModifiedAt: TimeInterval? = nil, runtimeStatusVerified: Bool = false, codexServerBacked: Bool = false, completionAt: TimeInterval? = nil) {
         self.id = id; self.state = SessionState(rawValue: state) ?? .unknown; self.ts = ts; self.cwd = cwd
         self.codexServerBacked = codexServerBacked
         self.runtimeStatusVerified = runtimeStatusVerified
@@ -61,6 +63,7 @@ public struct Session {
         self.cacheTokens = cacheTokens; self.model = model
         self.tty = tty; self.terminal = terminal
         self.provider = provider; self.lastEvent = SessionEvent(rawValue: lastEvent) ?? .unknown; self.detail = detail
+        self.completionAt = self.lastEvent == .stop ? completionAt ?? ts : nil
     }
 
     /// A Codex approval can stay pending until PostToolUse, even after the user
@@ -73,7 +76,8 @@ public struct Session {
 
     /// Sessions that finished their last turn within the completion window.
     public func finished(within seconds: TimeInterval, now: TimeInterval = Date().timeIntervalSince1970) -> Bool {
-        state == .idle && outcome == .success && now >= ts && now - ts < seconds
+        guard state == .idle, let completionAt else { return false }
+        return now >= completionAt && now - completionAt < seconds
     }
 
     public var dirName: String {
