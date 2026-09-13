@@ -116,6 +116,13 @@ public enum HookAdapter {
             }
             if state == "waiting" && previousState == "done" { return "" }
             if state == "idle" && ["working", "waiting"].contains(previousState) { return "" }
+            // Stop also fires when the main agent yields to a background subagent whose result
+            // it will pick up later. That turn is not finished: keep working and hold the chime
+            // for the Stop that arrives with no subagent running. Background shells never block.
+            let backgroundSubagents = (hook["background_tasks"] as? [[String: Any]] ?? []).filter {
+                $0["type"] as? String == "subagent" && ($0["status"] as? String ?? "running") == "running"
+            }.count
+            if state == "done", event == "Stop", backgroundSubagents > 0 { state = "working" }
             if state != "waiting" { pending = [] }
             if state == "waiting", event == "PermissionRequest", let fingerprint {
                 if !pending.contains(fingerprint) { pending.append(fingerprint) }
@@ -134,7 +141,8 @@ public enum HookAdapter {
                     || (pending.isEmpty && previousState == "waiting" && string("detail", in: previous) == "input")
                 detail = question ? "input" : "permission"
             }
-            extra = ["pending_tools": pending, "pending_kinds": kinds, "pending_agents": agents]
+            extra = ["pending_tools": pending, "pending_kinds": kinds, "pending_agents": agents,
+                     "background_subagents": backgroundSubagents]
         }
         let now = Date().timeIntervalSince1970
         let ts = previousState == state && sameTurn ? previous["ts"] as? Double ?? now : now

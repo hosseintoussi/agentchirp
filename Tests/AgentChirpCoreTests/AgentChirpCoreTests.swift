@@ -406,6 +406,9 @@ suite("Lifecycle and notification policy") {
     _ = policy.update([session("working", "UserPromptSubmit")])
     expect(policy.update([session("idle", "Stop")]).completed.count, 1, "successful transition sounds once")
     expect(policy.update([session("idle", "Stop")]).completed.count, 0, "repeated completion is silent")
+    _ = policy.update([session("working", "UserPromptSubmit")])
+    expect(policy.update([session("working", "Stop")]).completed.count, 0, "yielding to a background subagent is silent")
+    expect(policy.update([session("idle", "Stop", ts: 996)]).completed.count, 1, "the Stop after the subagent sounds once")
     expect(policy.update([session("waiting", "Notification")]).waiting.count, 1, "new waiting schedules a ping")
     expect(policy.update([]).cancelWaiting.contains("test"), true, "removed sessions cancel pending pings")
     let completed = session("idle", "Stop")
@@ -846,6 +849,23 @@ suite("Claude hook adapter") {
     expect(fire("resume", "PostToolUse", build)["state"] as? String ?? "", "working", "the last request resumes work")
     _ = fire("waiting", "PermissionRequest", build)
     expect((fire("done", "Stop")["pending_tools"] as? [String] ?? ["x"]).count, 0, "a finished turn forgets its requests")
+
+    // A Stop that yields to a running background subagent is not a completion.
+    _ = fire("working", "UserPromptSubmit")
+    let runningAgent: [String: Any] = ["id": "a1", "type": "subagent", "status": "running", "agent_type": "general-purpose"]
+    let runningShell: [String: Any] = ["id": "s1", "type": "shell", "status": "running", "command": "sleep 25"]
+    record = fire("done", "Stop", ["background_tasks": [runningShell, runningAgent]])
+    expect(record["state"] as? String ?? "", "working", "a turn that yielded to a background subagent keeps working")
+    expect(record["background_subagents"] as? Int ?? 0, 1, "running subagents are counted, shells are not")
+    let yielded = SessionRepository(environment: SessionEnvironment(processIsDead: { _, _ in false })).loadSessions(dir: dir)[0]
+    expect(yielded.finished(within: 10), false, "no completion cue while a subagent runs")
+    expect(BeaconDescriptor(sessions: [yielded]).signal == .neutral, true, "the beacon keeps breathing, not green")
+    expect(yielded.needsKeepAwake, true, "the running subagent keeps the Mac awake")
+    record = fire("done", "Stop", ["background_tasks": [runningShell, ["id": "a1", "type": "subagent", "status": "completed"]]])
+    expect(record["state"] as? String ?? "", "done", "a background shell alone does not defer completion")
+    _ = fire("working", "UserPromptSubmit")
+    expect(fire("done", "StopFailure", ["background_tasks": [runningAgent]])["state"] as? String ?? "", "done",
+           "a failed turn is still over")
 
     // Records written by the notification-only hook set still behave.
     _ = fire("working", "UserPromptSubmit")

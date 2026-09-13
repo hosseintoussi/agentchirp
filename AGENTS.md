@@ -153,7 +153,10 @@ call never clears someone else's prompt. Records without fingerprints (notificat
 hook sets) resume on any main-thread step. Headless `claude -p` runs fire PermissionRequest
 and then deny without a prompt, so they can show a brief wait. A repeated
 state keeps its `ts`, so clocks measure time in the current state. Hooks persist
-`last_event`; only Stop is successful completion. Startup, StopFailure, and Interrupt
+`last_event`; only Stop is successful completion, and a Stop whose `background_tasks`
+lists a running `subagent` is recorded as still working (`background_subagents`): the main
+agent resumes when the result arrives, and the Stop after that sounds once. Background
+shells never defer completion. Subagents fire SubagentStop, which is not hooked. Startup, StopFailure, and Interrupt
 never produce a completion sound or green tint. Escape fires no hook: `loadSessions`
 resolves a working Claude session to idle (`last_event` Interrupt, clock from the marker)
 when the transcript's `[Request interrupted by user…]` entry is newer than `updated_at`.

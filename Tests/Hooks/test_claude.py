@@ -93,6 +93,18 @@ class ClaudeHookTests(unittest.TestCase):
         self.assertEqual(self.fire("resume", "PreToolUse", tool_name="Bash")["state"], "working")
 
 
+    def test_background_subagent_defers_completion(self):
+        self.fire("working", "UserPromptSubmit")
+        tasks = [{"id": "s1", "type": "shell", "status": "running", "command": "sleep 25"},
+                 {"id": "a1", "type": "subagent", "status": "running", "agent_type": "general-purpose"}]
+        yielded = self.fire("done", "Stop", background_tasks=tasks)
+        self.assertEqual(yielded["state"], "working")
+        self.assertEqual(yielded["background_subagents"], 1)
+        self.assertNotIn("sleep 25", self.path.read_text())
+        finished = self.fire("done", "Stop", background_tasks=tasks[:1])
+        self.assertEqual(finished["state"], "done")
+        self.assertEqual(finished["last_event"], "Stop")
+
     def test_failure_preserves_outcome(self):
         self.fire("working", "UserPromptSubmit")
         state = self.fire("done", "StopFailure")

@@ -215,6 +215,11 @@ or a background subagent's tool call, never clears someone else's request. Press
 watches the transcript for Claude Code's interrupt marker and shows the session as idle
 from that moment, without a completion cue.
 
+Subagents never chime on their own. When the main agent hands off to a background
+subagent and ends its turn, the session stays working and the completion sound waits for
+the turn that ends with no subagent running. A background shell, such as a dev server,
+does not hold the sound back.
+
 A `flock`-based exclusive lock in the hook script prevents a race condition where a `Notification` hook firing mid-run could overwrite a `Stop` hook running at the same moment.
 
 ---

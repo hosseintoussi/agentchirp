@@ -34,6 +34,7 @@
 ### Fixed
 - Pressing Escape in Claude Code left the session "working" indefinitely, with keep-awake held, because Stop hooks do not fire on interrupts. The transcript's interrupt marker now resolves the session to idle without a completion cue
 - AskUserQuestion showed "Needs permission": Claude Code reports it through the permission flow. A `PermissionRequest` hook names the tool, stores the generic kind `input`, and marks waiting immediately instead of after the notification's six-second delay
+- Ending a turn while a background subagent is still running no longer chimes or shows the session idle; the completion cue plays once, after the result has been handled
 - Pending Claude requests are tracked by fingerprint and owning agent, as Codex requests already were: a parallel tool finishing or a background subagent's tool call no longer clears another request, and a subagent's own approved tool resumes it
 - Completion cues retain the successful hook's identity and time: stale successes cannot finish later Codex turns, and a Stop arriving after runtime idle still sounds once
 - Successive Codex questions between polls receive separate clocks, sound timers, and attention flashes
