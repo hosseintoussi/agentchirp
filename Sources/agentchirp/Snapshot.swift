@@ -118,6 +118,15 @@ func checkDashboardInteractions() {
             exit(1)
         }
     }
+    func waitFor(_ message: String, _ condition: () -> Bool) {
+        let deadline = Date(timeIntervalSinceNow: 3)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+        check(condition(), message)
+    }
+    NSApp.setActivationPolicy(.accessory)
+    NSApp.finishLaunching()
     func session(_ id: String, _ state: String, tokens: Int = 100, terminal: String = "Terminal",
                  provider: AgentProvider = .claude, age: TimeInterval = 90, cwd: String? = nil,
                  detail: String = "", lastEvent: String = "") -> Session {
@@ -246,6 +255,7 @@ func checkDashboardInteractions() {
     let delegate = AppDelegate()
     delegate.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let button = delegate.statusItem.button!
+    waitFor("Status item must attach to a visible window") { button.window?.isVisible == true }
     delegate.updateButton([session("attention", "working")])
     check(delegate.attentionTimer == nil && button.image!.isTemplate, "Working keeps the template beacon")
     let workingArt = button.image!.tiffRepresentation
@@ -346,11 +356,11 @@ func checkDashboardInteractions() {
 
     // Exercise the real anchored NSPopover as well as the standalone view.
     let anchored = DashboardController()
-    anchored.refresh(initial + [session("keyboard-next", "working")], muted: false)
     let popover = NSPopover()
     popover.animates = false
-    popover.contentViewController = anchored
-    popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    anchored.show(in: popover, relativeTo: button,
+                  sessions: initial + [session("keyboard-next", "working")], muted: false)
+    waitFor("Popover must attach its content window") { anchored.view.window != nil && popover.isShown }
     let anchoredRows = descendants(anchored.view).compactMap { $0 as? SessionRow }.filter { $0.isEnabled }
     let window = anchored.view.window!
     check(window.makeFirstResponder(anchoredRows[0]), "Rows must accept keyboard focus")
@@ -399,6 +409,7 @@ func checkDashboardInteractions() {
             anchored.show(in: popover, relativeTo: button,
                           sessions: (0..<count).map { session("cycle-\($0)", "working") }, muted: false)
             RunLoop.current.run(until: Date(timeIntervalSinceNow: animated ? 0.3 : 0.06))
+            waitFor("Reopened popover must attach its content window") { anchored.view.window != nil && popover.isShown }
             let frame = anchored.view.window!.frame
             let size = anchored.view.frame.size
             check(popover.contentSize == size, "Reopening must synchronize popover and dashboard size")
