@@ -31,7 +31,13 @@ jobs:
           python3 Tests/CodexRuntime/test_launcher.py
 
       - name: Native UI and popover layout regressions
-        run: .build/release/agentchirp --ui-check
+        run: |
+          if .build/release/agentchirp --ui-check; then
+            exit 0
+          fi
+          # Preserve a failing check while exposing native traps and force unwraps.
+          lldb --batch -o run -k 'thread backtrace all' -- .build/release/agentchirp --ui-check
+          exit 1
 
       - name: App bundle and installation checks
         run: |
