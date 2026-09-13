@@ -51,7 +51,7 @@ Reduce Motion removes the flash.
 
 Requires macOS 13 or later. One app runs on Apple Silicon and Intel Macs.
 
-1. Download [AgentChirp.dmg](https://github.com/hosseintoussi/ccbeacon/releases/latest/download/AgentChirp.dmg).
+1. Download [AgentChirp.dmg](https://github.com/hosseintoussi/agentchirp/releases/latest/download/AgentChirp.dmg).
 2. Drag **AgentChirp** into **Applications** and open it.
 3. Review the integration status in the welcome window. Enable **Launch AgentChirp at login** if you want it ready when you sign in.
 
@@ -85,7 +85,7 @@ Requires Swift (Xcode or Command Line Tools). Python 3 is used only by the
 packaging and test scripts on the developer's machine.
 
 ```sh
-git clone https://github.com/hosseintoussi/ccbeacon.git agentchirp
+git clone https://github.com/hosseintoussi/agentchirp.git
 cd agentchirp
 swift build -c release
 .build/release/agentchirp &

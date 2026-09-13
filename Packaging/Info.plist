@@ -11,7 +11,7 @@
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>AgentChirp brings the terminal session you click to the front.</string>
-    <key>SUFeedURL</key><string>https://github.com/hosseintoussi/ccbeacon/releases/latest/download/appcast.xml</string>
+    <key>SUFeedURL</key><string>https://github.com/hosseintoussi/agentchirp/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key><string>QcztTI2mLIqdD/Lmw/JFSALUy5cKpn9zkj2PTzoVjjc=</string>
     <key>SUEnableAutomaticChecks</key><true/>
     <key>SUAutomaticallyUpdate</key><false/>

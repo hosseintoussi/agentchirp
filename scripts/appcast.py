@@ -65,7 +65,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=pathlib.Path)
     parser.add_argument("--tools", type=pathlib.Path, default=ROOT / ".build/tools/sparkle-2.9.6/bin")
-    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", "hosseintoussi/ccbeacon"))
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", "hosseintoussi/agentchirp"))
     parser.add_argument("--key-file", help="Private key file; omit to use the agentchirp Keychain account")
     args = parser.parse_args()
     print(build(args.archive.resolve(), args.tools.resolve(), args.repository, args.key_file))

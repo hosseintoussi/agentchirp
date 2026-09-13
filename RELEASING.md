@@ -126,9 +126,8 @@ profiling or session data to GitHub.
    verification stop publication.
 
 The README download button points to `releases/latest/download/AgentChirp.dmg`.
-The GitHub repository is currently `hosseintoussi/ccbeacon`; the app and asset
-names are AgentChirp. CI derives hosting URLs from `GITHUB_REPOSITORY`. Update the
-local default feed URL and README links if the repository is renamed.
+The GitHub repository is `hosseintoussi/agentchirp`. CI derives hosting URLs from
+`GITHUB_REPOSITORY`; the local default feed URL and README links use this repository.
 The download becomes available after the first signed app release. No source or binary has
 to be hosted on a separate download server.
 
