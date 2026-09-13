@@ -2,10 +2,12 @@
 
 ## [Unreleased]
 
+## [3.0.0-rc.1] - 2026-09-13
+
 ### Native installation
 - Missing agents no longer require manual setup: installation links and automatic detection handle either tool arriving later without blocking AgentChirp
 - Added a Developer ID signed app bundle, Apple notarization and stapling, and a drag-to-Applications DMG release pipeline; removed the Homebrew release path
-- Added a first-run setup window with integration results, retry, launch at login, automatic Codex launcher setup and an Open Codex action, and built-in Sparkle updates
+- Added a first-run setup window with integration results, retry, launch at login, automatic Codex launcher setup, and built-in Sparkle updates
 - Replaced the Python hook runtime with a bundled Swift helper, preserving session state, privacy, atomic writes, and shared bucket locks
 - Added signed update archive verification, clean-home bundle checks, and native setup interaction/layout checks
 
@@ -20,9 +22,9 @@
 - The menu bar beacon is calm: a new request flashes three times and then holds steady orange; working breathes slowly (opacity only) and idle is steady. The continuous 30 fps attention pulse is gone. A completion shows green even while other sessions work
 - The console header now answers the question ("2 need input", "3 working", "All quiet", "Nothing running") beside a beacon lit by the top state; the top right holds captioned Awake, Sounds, and Quit buttons (version on the quit tooltip) instead of a menu
 - Tabs are gone. One list orders sessions by what needs you: waiting (longest first), working (longest running first), idle (newest first). Rows carry a state dot and a verb clock ("waiting 2m", "idle 2h 1m")
-- Waiting rows show only "Needs permission" or "Waiting for your answer"; hooks store generic waiting kinds instead of commands or notification text
+- Waiting rows show only "Needs permission", "Waiting for your answer", or "Waiting for you"; hooks store generic waiting kinds instead of commands or notification text
 - One orange everywhere: the light-mode attention color is derived from system orange instead of a hardcoded brown; the console root is clear so the popover material shows through; fills double under Increase Contrast; row glyphs use secondary label color
-- Copying a path for an unsupported terminal now says "Copied" in the row; tooltips name the terminal that can't be focused
+- Rows open supported terminals when detected; unsupported or undetected terminals have no row action or action icon. Project paths remain available in tooltips
 - The needs-input sound is Ping instead of Sosumi
 - Same-name projects show `parent/name`; VoiceOver labels include state, time, and the ask; keyboard focus draws the system focus ring
 - Header shrank from 92 to 56 points and the footer was removed; the popover fits its content
@@ -49,7 +51,7 @@
 - Release builds check out the exact successful CI commit and verify its tag against appVersion
 - Stale cleanup shares persistent locks with hook writers and preserves concurrently refreshed state
 - Claude startup and failed turns no longer show successful completion; hooks retain lifecycle outcomes
-- Transcript replacement resets token totals, and failed reads retry without requiring another file change
+- Transcript replacement resets cached model and interrupt metadata, and failed reads retry without requiring another file change
 - Clearing waiting state correctly changes an overlapping completion beacon from orange to green
 - Each row completion dot expires independently; header text stays clear of its controls
 

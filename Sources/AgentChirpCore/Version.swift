@@ -2,7 +2,7 @@ import Foundation
 
 public let appName = "AgentChirp"
 
-public let appVersion = "2.1.3"
+public let appVersion = "3.0.0-rc.1"
 
 // The packaging script explicitly marks development bundles. Source executables
 // are always development builds, regardless of their location.

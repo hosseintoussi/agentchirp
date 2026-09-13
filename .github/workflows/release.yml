@@ -32,7 +32,7 @@ jobs:
       - name: Find version tag on this commit
         id: tag
         run: |
-          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$' | head -1 || true)
           if [ -n "$TAG" ]; then
             test "$(git rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")"
             VERSION=$(sed -n 's/public let appVersion = "\(.*\)"/\1/p' Sources/AgentChirpCore/Version.swift)
@@ -101,7 +101,9 @@ jobs:
           tag_name: ${{ needs.candidate.outputs.tag }}
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true
-          make_latest: legacy
+          prerelease: ${{ contains(needs.candidate.outputs.tag, '-rc.') }}
+          make_latest: ${{ contains(needs.candidate.outputs.tag, '-rc.') && 'false' || 'legacy' }}
+          name: AgentChirp ${{ needs.candidate.outputs.tag }}
           files: |
             dist/AgentChirp.dmg
             dist/AgentChirp-*.zip
